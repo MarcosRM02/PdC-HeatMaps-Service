@@ -1,0 +1,28 @@
+sudo apt update && sudo apt install g++
+g++ helloWorld.cpp -o helloWorld
+./programa
+
+
+unificado --> g++ helloWorld.cpp -o ./bin/helloWorld && ./bin/helloWorld
+
+leyendfo la libreria externa --> g++ -I./include heatMaps.cpp -o ./bin/heatMaps && ./bin/heatMaps
+
+
+Automatizar la instalacion de esto
+sudo apt install libopencv-dev
+sudo apt install libeigen3-dev
+
+
+g++ -I./include -I/usr/include/eigen3 heatMaps.cpp -o ./bin/heatMaps && ./bin/heatMaps
+
+
+
+g++ -std=c++17 -I./include -I/usr/include/eigen3  -I/usr/include/opencv4 -o main main.cpp -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio && ./main
+
+
+
+sudo apt-get update
+sudo apt-get install ffmpeg libavcodec-dev libavformat-dev libavutil-dev
+g++ main.cpp -o mi_programa `pkg-config --cflags --libs libavformat libavcodec libavutil`
+
+
