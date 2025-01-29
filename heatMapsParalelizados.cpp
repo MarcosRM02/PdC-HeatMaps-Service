@@ -15,6 +15,8 @@
 #include <condition_variable>
 #include <cstdio>
 
+#include <hiredis/hiredis.h> // Incluir hiredis para Redis
+
 using namespace std;
 using namespace Eigen;
 using namespace rapidjson;
@@ -112,7 +114,6 @@ void readCSVColumns(const string &filename, vector<DataMap> &coordinate)
 {
     // Abre el archivo CSV
     ifstream file(filename);
-
     string line;
 
     if (!file.is_open())
@@ -178,7 +179,7 @@ void threadFunction(const string &filename, vector<pair<double, double>> &coordi
     mostrarMapeo(coordinate_data);
 }
 
-void readCSVEncapsulation(const string &filename_L, vector<pair<double, double>> &coordinate_L, const string &filename_R, vector<pair<double, double>> &coordinate_R)
+void readCoordinatesEncapsulation(const string &filename_L, vector<pair<double, double>> &coordinate_L, const string &filename_R, vector<pair<double, double>> &coordinate_R)
 {
     read_coordinates(filename_L, coordinate_L);
     read_coordinates(filename_R, coordinate_R);
@@ -279,28 +280,19 @@ void visualize_heatmap(Mat &heatmap, const vector<pair<double, double>> &coordin
 // Función del hilo que escribe los frames en ffmpeg
 void writer_thread_function(const string &filename, int width, int height, double fps)
 {
-
     // Construir el comando de ffmpeg
-
     string cmd = "ffmpeg -y -threads 8 -f rawvideo -pixel_format bgr24 -video_size " +
-
                  to_string(width) + "x" + to_string(height) +
-
                  " -framerate " + to_string(fps) +
-
                  " -i pipe:0 -c:v libx264 -preset fast -crf 23 -x264-params \"threads=8\" " +
-
                  "-pix_fmt yuv420p \"" + filename + "\"";
 
     // Abrir el pipe a ffmpeg
-
     FILE *ffmpeg_pipe = popen(cmd.c_str(), "w");
 
     if (!ffmpeg_pipe)
     {
-
         cerr << "Error: No se pudo iniciar ffmpeg." << endl;
-
         return;
     }
 
@@ -312,9 +304,7 @@ void writer_thread_function(const string &filename, int width, int height, doubl
         Mat frame;
 
         {
-
             unique_lock<mutex> lock(queue_mutex);
-
             queue_cond.wait(lock, []
                             { return !frame_queue.empty() || processing_done; });
 
@@ -323,20 +313,15 @@ void writer_thread_function(const string &filename, int width, int height, doubl
 
             if (!frame_queue.empty())
             {
-
                 frame = frame_queue.front();
-
                 frame_queue.pop();
             }
         }
 
         if (!frame.empty())
         {
-
-            // Escribir el frame en formato rawvideo
-
+             // Escribir el frame en formato rawvideo
             size_t bytes_written = fwrite(frame.data, 1, frame.total() * frame.elemSize(), ffmpeg_pipe);
-
             if (bytes_written != frame.total() * frame.elemSize())
             {
 
@@ -346,7 +331,6 @@ void writer_thread_function(const string &filename, int width, int height, doubl
     }
 
     // Cerrar el pipe
-
     pclose(ffmpeg_pipe);
 }
 
@@ -357,45 +341,33 @@ void generate_combined_animation(const vector<Mat> &frames_left, const vector<Ma
 
     if (frames_left.empty() || frames_right.empty())
     {
-
         cerr << "No hay cuadros para guardar." << endl;
-
         return;
     }
 
     int width = frames_left[0].cols + frames_right[0].cols;
-
     int height = frames_left[0].rows;
 
     // Iniciar hilo escritor
 
     processing_done = false;
-
     thread writer_thread(writer_thread_function, filename, width, height, fps);
 
     // Procesar cada frame y añadirlo a la cola
 
     for (size_t i = 0; i < frames_left.size(); ++i)
     {
-
         Mat combined_frame;
-
         hconcat(frames_left[i], frames_right[i], combined_frame);
-
         Mat combined_frame_8UC1;
-
         combined_frame.convertTo(combined_frame_8UC1, CV_8UC1, 255.0 / 4095.0);
-
         Mat color_frame;
-
         applyColorMap(combined_frame_8UC1, color_frame, COLORMAP_JET);
 
         // Añadir frame a la cola de forma segura
 
         {
-
             lock_guard<mutex> lock(queue_mutex);
-
             frame_queue.push(color_frame.clone()); // Clonar para evitar aliasing
         }
 
@@ -405,18 +377,14 @@ void generate_combined_animation(const vector<Mat> &frames_left, const vector<Ma
     // Señalizar fin del procesamiento
 
     {
-
         lock_guard<mutex> lock(queue_mutex);
-
         processing_done = true;
     }
 
     queue_cond.notify_one();
 
     // Esperar a que el hilo escritor termine
-
     writer_thread.join();
-
     cout << "Animación combinada guardada como " << filename << endl;
 }
 
@@ -463,16 +431,91 @@ void usingThreads(int &width, int &height, vector<vector<double>> &pressures, ve
         frames.push_back(heatmap);
     }
 }
+
+// ------------------------------------------------------------------
+
+// Función para conectarse a Redis y obtener los datos CSV
+vector<vector<double>> getCSVFromRedis(const string &key, const string &redis_host = "localhost", int redis_port = 6379) //&redis_host = "redis_container",
+{
+    redisContext *c = redisConnect(redis_host.c_str(), redis_port);
+    if (c == NULL || c->err)
+    {
+        if (c)
+        {
+            cerr << "Error: " << c->errstr << endl;
+            redisFree(c);
+        }
+        else
+        {
+            cerr << "Error: No se pudo asignar el contexto Redis" << endl;
+        }
+        exit(1);
+    }
+
+    // Ejecutar comando GET en Redis
+    redisReply *reply = (redisReply *)redisCommand(c, "GET %s", key.c_str());
+    if (reply == NULL || reply->type == REDIS_REPLY_NIL)
+    {
+        cerr << "Error: No se encontró la clave " << key << " en Redis." << endl;
+        redisFree(c);
+        return {};
+    }
+
+    // Convertir la respuesta de Redis en una cadena CSV
+    string csv_data(reply->str);
+    freeReplyObject(reply);
+    redisFree(c);
+
+    // Convertir CSV en matriz de datos
+    vector<vector<double>> data;
+    istringstream stream(csv_data);
+    string line;
+
+    while (getline(stream, line))
+    {
+        vector<double> row;
+        istringstream lineStream(line);
+        string value;
+
+        while (getline(lineStream, value, ','))
+        {
+            try
+            {
+                row.push_back(stod(value)); // Convertir a double
+            }
+            catch (const invalid_argument &e)
+            {
+                cerr << "Error en conversión de datos: " << value << endl;
+                row.push_back(0.0);
+            }
+        }
+        data.push_back(row);
+    }
+
+    return data;
+}
+
+void readFromRedisDBEncapsulation(vector<vector<double>> &pressures_left, vector<vector<double>> &pressures_right)
+{
+    pressures_left = getCSVFromRedis("r");
+    pressures_right = getCSVFromRedis("l");
+}
+
 int main()
 {
     // Parámetros iniciales
     // int width = 350, height = 1040;
     int width = 175, height = 520;
-    vector<pair<double, double>> coordinates_left;  // Ejemplo de coordenadas
-    vector<pair<double, double>> coordinates_right; // Ejemplo de coordenadas
-    readCSVEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right);
-    vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
-    vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
+    vector<pair<double, double>> coordinates_left;                                                            // Ejemplo de coordenadas
+    vector<pair<double, double>> coordinates_right;                                                           // Ejemplo de coordenadas
+    readCoordinatesEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right); // Revisar esto, pq estoyu
+
+    // vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
+    // vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
+
+    vector<vector<double>> pressures_left;  // Ejemplo de presiones
+    vector<vector<double>> pressures_right; // Ejemplo de presiones
+    readFromRedisDBEncapsulation(pressures_left, pressures_right);
 
     vector<Mat> frames_left, frames_right;
 

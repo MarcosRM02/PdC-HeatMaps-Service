@@ -26,3 +26,8 @@ sudo apt-get install ffmpeg libavcodec-dev libavformat-dev libavutil-dev
 g++ main.cpp -o mi_programa `pkg-config --cflags --libs libavformat libavcodec libavutil`
 
 
+Para meter lkos datos en la redis desde un .csv
+
+cat left.csv | redis-cli -h localhost -x SET l
+cat right.csv | redis-cli -h localhost -x SET r
+
