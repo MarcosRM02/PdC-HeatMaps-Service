@@ -320,7 +320,7 @@ void writer_thread_function(const string &filename, int width, int height, doubl
 
         if (!frame.empty())
         {
-             // Escribir el frame en formato rawvideo
+            // Escribir el frame en formato rawvideo
             size_t bytes_written = fwrite(frame.data, 1, frame.total() * frame.elemSize(), ffmpeg_pipe);
             if (bytes_written != frame.total() * frame.elemSize())
             {
@@ -534,3 +534,81 @@ int main()
 
     return 0;
 }
+
+// void consumeFromQueue(const std::string &queue)
+// {
+//     redisContext *context = redisConnect("127.0.0.1", 6379);
+//     if (context == nullptr || context->err)
+//     {
+//         std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+//         return;
+//     }
+
+//     std::string lastID = "0"; // Comenzar desde el inicio
+
+//     while (true)
+//     {
+//         // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
+//         redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
+
+//         if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+//         {
+//             for (size_t i = 0; i < reply->elements; i++)
+//             {
+//                 redisReply *stream = reply->element[i];
+//                 if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
+//                 {
+//                     redisReply *streamName = stream->element[0];
+//                     redisReply *messages = stream->element[1];
+
+//                     for (size_t j = 0; j < messages->elements; j++)
+//                     {
+//                         redisReply *message = messages->element[j];
+
+//                         if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
+//                         {
+//                             redisReply *msgID = message->element[0];
+//                             redisReply *msgData = message->element[1];
+
+//                             std::string lado1, datos1, lado2, datos2;
+
+//                             if (msgID->type == REDIS_REPLY_STRING)
+//                             {
+//                                 lastID = msgID->str; // Guardamos el último ID leído
+//                                 std::cout << "📩 Mensaje recibido (" << lastID << "): ";
+
+//                                 for (size_t k = 0; k < msgData->elements; k += 2)
+//                                 {
+//                                     redisReply *field = msgData->element[k];
+//                                     redisReply *value = msgData->element[k + 1];
+
+//                                     if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
+//                                     {
+//                                         if (std::string(field->str) == "lado1")
+//                                             lado1 = value->str;
+//                                         if (std::string(field->str) == "datos1")
+//                                             datos1 = value->str;
+//                                         if (std::string(field->str) == "lado2")
+//                                             lado2 = value->str;
+//                                         if (std::string(field->str) == "datos2")
+//                                             datos2 = value->str;
+//                                     }
+//                                 }
+
+//                                 // Imprimir el par de valores
+//                                 std::cout << "[(" << lado1 << ", " << datos1 << "), (" << lado2 << ", " << datos2 << ")]" << std::endl;
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+
+//         if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
+//         {
+//             freeReplyObject(reply);
+//         }
+//     }
+
+//     redisFree(context);
+// }

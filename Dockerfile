@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     libopencv-dev \
     libeigen3-dev \
     ffmpeg \
+    libhiredis-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Establece el directorio de trabajo

@@ -11,7 +11,7 @@ services:
     networks:
       - external
 
-  c_app:
+  c-service:
     build: .
     container_name: c_app_container
     volumes:
