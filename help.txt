@@ -31,3 +31,5 @@ Para meter lkos datos en la redis desde un .csv
 cat left.csv | redis-cli -h localhost -x SET l
 cat right.csv | redis-cli -h localhost -x SET r
 
+redis-cli
+XADD redis_queue * id1 "123" id2 "456" id3 "789" 

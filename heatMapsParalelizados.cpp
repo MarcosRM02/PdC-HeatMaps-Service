@@ -501,114 +501,119 @@ void readFromRedisDBEncapsulation(vector<vector<double>> &pressures_left, vector
     pressures_right = getCSVFromRedis("l");
 }
 
+// -----------------------------------------------------------------------------
+void consumeFromQueue(const std::string &queue)
+{
+    redisContext *context = redisConnect("redis_container", 6379);
+    if (context == nullptr || context->err)
+    {
+        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+        return;
+    }
+
+    std::string lastID = "0"; // Comenzar desde el inicio
+
+    while (true)
+    {
+        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
+        // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
+        redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
+
+        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        {
+            for (size_t i = 0; i < reply->elements; i++)
+            {
+                redisReply *stream = reply->element[i];
+                if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
+                {
+                    redisReply *streamName = stream->element[0];
+                    redisReply *messages = stream->element[1];
+
+                    for (size_t j = 0; j < messages->elements; j++)
+                    {
+                        redisReply *message = messages->element[j];
+
+                        if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
+                        {
+                            redisReply *msgID = message->element[0];
+                            redisReply *msgData = message->element[1];
+
+                            std::string lado1, datos1, lado2, datos2;
+
+                            if (msgID->type == REDIS_REPLY_STRING)
+                            {
+                                lastID = msgID->str; // Guardamos el último ID leído
+                                std::cout << "📩 Mensaje recibido (" << lastID << "): ";
+
+                                for (size_t k = 0; k < msgData->elements; k += 2)
+                                {
+                                    redisReply *field = msgData->element[k];
+                                    redisReply *value = msgData->element[k + 1];
+
+                                    if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
+                                    {
+                                        if (std::string(field->str) == "id1")
+                                            lado1 = value->str;
+                                        if (std::string(field->str) == "id2")
+                                            datos1 = value->str;
+                                        if (std::string(field->str) == "id3")
+                                            lado2 = value->str;
+                                    }
+                                }
+
+                                // Imprimir el par de valores
+                                std::cout << "[(" << lado1 << ", " << datos1 << "), (" << lado2 << ", " << datos2 << ")]" << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
+        {
+            freeReplyObject(reply);
+        }
+    }
+
+    redisFree(context);
+}
+
 int main()
 {
     // Parámetros iniciales
     // int width = 350, height = 1040;
-    int width = 175, height = 520;
-    vector<pair<double, double>> coordinates_left;                                                            // Ejemplo de coordenadas
-    vector<pair<double, double>> coordinates_right;                                                           // Ejemplo de coordenadas
-    readCoordinatesEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right); // Revisar esto, pq estoyu
+    // int width = 175, height = 520;
+    // vector<pair<double, double>> coordinates_left;                                                            // Ejemplo de coordenadas
+    // vector<pair<double, double>> coordinates_right;                                                           // Ejemplo de coordenadas
+    // readCoordinatesEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right); // Revisar esto, pq estoyu
 
-    // vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
-    // vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
+    // // vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
+    // // vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
 
-    vector<vector<double>> pressures_left;  // Ejemplo de presiones
-    vector<vector<double>> pressures_right; // Ejemplo de presiones
-    readFromRedisDBEncapsulation(pressures_left, pressures_right);
+    // vector<vector<double>> pressures_left;  // Ejemplo de presiones
+    // vector<vector<double>> pressures_right; // Ejemplo de presiones
+    // readFromRedisDBEncapsulation(pressures_left, pressures_right);
 
-    vector<Mat> frames_left, frames_right;
+    // vector<Mat> frames_left, frames_right;
 
-    std::thread right([&]()
-                      { usingThreads(width, height, pressures_right, coordinates_right, frames_right); }); // spawn new thread that calls usingThreads for the right side
+    // std::thread right([&]()
+    //                   { usingThreads(width, height, pressures_right, coordinates_right, frames_right); }); // spawn new thread that calls usingThreads for the right side
 
-    std::thread left([&]()
-                     { usingThreads(width, height, pressures_left, coordinates_left, frames_left); }); // spawn new thread that calls usingThreads for the left side
+    // std::thread left([&]()
+    //                  { usingThreads(width, height, pressures_left, coordinates_left, frames_left); }); // spawn new thread that calls usingThreads for the left side
 
-    // synchronize threads:
-    right.join(); // pauses until first finishes
-    left.join();  // pauses until second finishes
+    // // synchronize threads:
+    // right.join(); // pauses until first finishes
+    // left.join();  // pauses until second finishes
 
-    // Generar la animación combinada
-    generate_combined_animation(frames_left, frames_right, "combined_pressure_animation_paralelizado.mp4", 50.0);
+    // // Generar la animación combinada
+    // generate_combined_animation(frames_left, frames_right, "combined_pressure_animation_paralelizado.mp4", 50.0);
+
+    // Definición de la variable global
+    const std::string queue = "redis_queue";
+
+    consumeFromQueue(queue);
 
     return 0;
 }
-
-// void consumeFromQueue(const std::string &queue)
-// {
-//     redisContext *context = redisConnect("127.0.0.1", 6379);
-//     if (context == nullptr || context->err)
-//     {
-//         std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
-//         return;
-//     }
-
-//     std::string lastID = "0"; // Comenzar desde el inicio
-
-//     while (true)
-//     {
-//         // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
-//         redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
-
-//         if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
-//         {
-//             for (size_t i = 0; i < reply->elements; i++)
-//             {
-//                 redisReply *stream = reply->element[i];
-//                 if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
-//                 {
-//                     redisReply *streamName = stream->element[0];
-//                     redisReply *messages = stream->element[1];
-
-//                     for (size_t j = 0; j < messages->elements; j++)
-//                     {
-//                         redisReply *message = messages->element[j];
-
-//                         if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
-//                         {
-//                             redisReply *msgID = message->element[0];
-//                             redisReply *msgData = message->element[1];
-
-//                             std::string lado1, datos1, lado2, datos2;
-
-//                             if (msgID->type == REDIS_REPLY_STRING)
-//                             {
-//                                 lastID = msgID->str; // Guardamos el último ID leído
-//                                 std::cout << "📩 Mensaje recibido (" << lastID << "): ";
-
-//                                 for (size_t k = 0; k < msgData->elements; k += 2)
-//                                 {
-//                                     redisReply *field = msgData->element[k];
-//                                     redisReply *value = msgData->element[k + 1];
-
-//                                     if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
-//                                     {
-//                                         if (std::string(field->str) == "lado1")
-//                                             lado1 = value->str;
-//                                         if (std::string(field->str) == "datos1")
-//                                             datos1 = value->str;
-//                                         if (std::string(field->str) == "lado2")
-//                                             lado2 = value->str;
-//                                         if (std::string(field->str) == "datos2")
-//                                             datos2 = value->str;
-//                                     }
-//                                 }
-
-//                                 // Imprimir el par de valores
-//                                 std::cout << "[(" << lado1 << ", " << datos1 << "), (" << lado2 << ", " << datos2 << ")]" << std::endl;
-//                             }
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-
-//         if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
-//         {
-//             freeReplyObject(reply);
-//         }
-//     }
-
-//     redisFree(context);
-// }
