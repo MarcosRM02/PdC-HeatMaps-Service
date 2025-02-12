@@ -78,5 +78,6 @@ COPY . .
 # Comando para ejecutar el binario
 # CMD ["./bin/paralelizado"]
 
+RUN chmod +x run.sh
 
 CMD ["./run.sh"]

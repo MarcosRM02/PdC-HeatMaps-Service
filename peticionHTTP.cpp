@@ -62,7 +62,7 @@ std::string fetchCSV(const std::string &baseUrl, const std::string &experimentId
 
 int main()
 {
-    std::string baseUrl = "http://localhost:3000/"; // Cambia esto por la IP/host de tu servidor -> Cambiar por el nombre del contenedor cuando lo docekerice
+    std::string baseUrl = "http://ssith-backend-container:3000/"; // Cambia esto por la IP/host de tu servidor -> Cambiar por el nombre del contenedor cuando lo docekerice
     std::string experimentId = "1";
     std::string participantId = "1";
     std::string swId = "1";
