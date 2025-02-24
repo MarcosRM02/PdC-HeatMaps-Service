@@ -88,26 +88,6 @@ void read_coordinates(const string &filename, vector<pair<double, double>> &coor
     }
 }
 
-void printDF(const vector<vector<double>> &vec)
-{
-    for (const auto &row : vec)
-    {
-        for (const auto &elem : row)
-        {
-            std::cout << elem << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
-void displayCoordinates(const std::vector<std::pair<double, double>> &coordinates_left)
-{
-    for (const auto &coord : coordinates_left)
-    {
-        std::cout << "(" << coord.first << ", " << coord.second << ")" << std::endl;
-    }
-}
-
 // ------------------------------------------------------------------------------------------
 
 void readCSVColumns(const string &filename, vector<DataMap> &coordinate)
@@ -145,23 +125,6 @@ void readCSVColumns(const string &filename, vector<DataMap> &coordinate)
     file.close();
 }
 
-void mostrarMapeo(vector<DataMap> &coordinate_data)
-{
-    // Mostrar los resultados
-    for (const auto &data : coordinate_data)
-    {
-        const auto &coord = data.coordinates;
-        const auto &values = data.values;
-
-        cout << "Coordenada (" << coord.first << ", " << coord.second << "): ";
-        for (double value : values)
-        {
-            cout << value << " ";
-        }
-        cout << endl;
-    }
-}
-
 void inicializarDataMaps(vector<pair<double, double>> &coordinates, vector<DataMap> &coordinateMap)
 {
     for (size_t i = 0; i < coordinates.size(); ++i)
@@ -173,10 +136,7 @@ void inicializarDataMaps(vector<pair<double, double>> &coordinates, vector<DataM
 void threadFunction(const string &filename, vector<pair<double, double>> &coordinates, vector<DataMap> &coordinate_data)
 {
     inicializarDataMaps(coordinates, coordinate_data);
-    // displayCoordinates(coordinates);
     readCSVColumns(filename, coordinate_data);
-    // Mostrar los resultados
-    mostrarMapeo(coordinate_data);
 }
 
 void readCoordinatesEncapsulation(const string &filename_L, vector<pair<double, double>> &coordinate_L, const string &filename_R, vector<pair<double, double>> &coordinate_R)
@@ -215,177 +175,26 @@ Mat circular_heat_map(const vector<pair<double, double>> &coordinates, const vec
 }
 
 // Función para visualizar los mapas de calor y los puntos
-void visualize_heatmap(Mat &heatmap, const vector<pair<double, double>> &coordinates)
+void visualize_heatmap(Mat &image, const vector<pair<double, double>> &coordinates)
 {
-    // Definir colores contrastantes
-    Scalar circle_color(255, 255, 255); // Blanco para los círculos
-    Scalar text_color(255, 255, 255);   // Blanco para el texto
-    Scalar text_outline_color(0, 0, 0); // Negro para el contorno del texto
+    // Colores: círculo en negro, texto en blanco
+    Scalar circle_color(0, 0, 0);     // Negro para los círculos
+    Scalar text_color(255, 255, 255); // Blanco para el texto
 
     for (size_t i = 0; i < coordinates.size(); ++i)
     {
         // Convertir las coordenadas a enteros
         Point point(static_cast<int>(coordinates[i].first), static_cast<int>(coordinates[i].second));
 
-        // Dibujar un círculo blanco en la posición
-        circle(heatmap, point, 5, circle_color, -1);
+        // Dibujar un círculo negro en la posición
+        circle(image, point, 5, circle_color, -1);
 
         // Posición desplazada para el texto
         Point text_position = point + Point(5, 5);
 
-        // Dibujar contorno negro para el texto (primero dibujar varias veces ligeramente desplazado)
-        putText(heatmap, to_string(i), text_position, FONT_HERSHEY_SIMPLEX, 0.4, text_outline_color, 1, LINE_AA);
-        putText(heatmap, to_string(i), text_position, FONT_HERSHEY_SIMPLEX, 0.4, text_outline_color, 1, LINE_AA);
-
-        // Dibujar el texto blanco encima del contorno
-        putText(heatmap, to_string(i), text_position, FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1, LINE_AA);
+        // Dibujar el texto blanco sin contorno
+        putText(image, to_string(i), text_position, FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1, LINE_AA);
     }
-}
-
-// -----------------------------------------------------------------
-
-// // Función para generar la animación combinada
-// void generate_combined_animation(const vector<Mat> &frames_left, const vector<Mat> &frames_right, const string &filename, double fps = 50.0)
-// {
-//     if (frames_left.empty() || frames_right.empty())
-//     {
-//         cerr << "No hay cuadros para guardar." << endl;
-//         return;
-//     }
-
-//     int width = frames_left[0].cols + frames_right[0].cols; // Ancho combinado de los dos mapas
-//     int height = frames_left[0].rows;                       // La altura es la misma para ambos
-
-//     VideoWriter writer(filename, VideoWriter::fourcc('m', 'p', '4', 'v'), fps, Size(width, height));
-
-//     for (size_t i = 0; i < frames_left.size(); ++i)
-//     {
-//         // Combinar los dos mapas de calor en una sola imagen
-//         Mat combined_frame;
-//         hconcat(frames_left[i], frames_right[i], combined_frame); // Concatenar los mapas de calor horizontalmente
-
-//         Mat color_frame;
-//         // applyColorMap(combined_frame / 16, color_frame, COLORMAP_JET); // Aplicar un mapa de colores
-//         Mat combined_frame_8UC1;
-//         combined_frame.convertTo(combined_frame_8UC1, CV_8UC1, 255.0 / 4095.0); // Escalar a 8 bits
-//         applyColorMap(combined_frame_8UC1, color_frame, COLORMAP_JET);
-
-//         writer.write(color_frame); // Escribir el cuadro en el archivo de video
-//     }
-
-//     writer.release();
-//     cout << "Animación combinada guardada como " << filename << endl;
-// }
-
-// Función del hilo que escribe los frames en ffmpeg
-void writer_thread_function(const string &filename, int width, int height, double fps)
-{
-    // Construir el comando de ffmpeg
-    string cmd = "ffmpeg -y -threads 8 -f rawvideo -pixel_format bgr24 -video_size " +
-                 to_string(width) + "x" + to_string(height) +
-                 " -framerate " + to_string(fps) +
-                 " -i pipe:0 -c:v libx264 -preset fast -crf 23 -x264-params \"threads=8\" " +
-                 "-pix_fmt yuv420p \"" + filename + "\"";
-
-    // Abrir el pipe a ffmpeg
-    FILE *ffmpeg_pipe = popen(cmd.c_str(), "w");
-
-    if (!ffmpeg_pipe)
-    {
-        cerr << "Error: No se pudo iniciar ffmpeg." << endl;
-        return;
-    }
-
-    // Leer frames de la cola y escribirlos
-
-    while (true)
-    {
-
-        Mat frame;
-
-        {
-            unique_lock<mutex> lock(queue_mutex);
-            queue_cond.wait(lock, []
-                            { return !frame_queue.empty() || processing_done; });
-
-            if (processing_done && frame_queue.empty())
-                break;
-
-            if (!frame_queue.empty())
-            {
-                frame = frame_queue.front();
-                frame_queue.pop();
-            }
-        }
-
-        if (!frame.empty())
-        {
-            // Escribir el frame en formato rawvideo
-            size_t bytes_written = fwrite(frame.data, 1, frame.total() * frame.elemSize(), ffmpeg_pipe);
-            if (bytes_written != frame.total() * frame.elemSize())
-            {
-
-                cerr << "Error al escribir el frame." << endl;
-            }
-        }
-    }
-
-    // Cerrar el pipe
-    pclose(ffmpeg_pipe);
-}
-
-void generate_combined_animation(const vector<Mat> &frames_left, const vector<Mat> &frames_right,
-
-                                 const string &filename, double fps = 50.0)
-{
-
-    if (frames_left.empty() || frames_right.empty())
-    {
-        cerr << "No hay cuadros para guardar." << endl;
-        return;
-    }
-
-    int width = frames_left[0].cols + frames_right[0].cols;
-    int height = frames_left[0].rows;
-
-    // Iniciar hilo escritor
-
-    processing_done = false;
-    thread writer_thread(writer_thread_function, filename, width, height, fps);
-
-    // Procesar cada frame y añadirlo a la cola
-
-    for (size_t i = 0; i < frames_left.size(); ++i)
-    {
-        Mat combined_frame;
-        hconcat(frames_left[i], frames_right[i], combined_frame);
-        Mat combined_frame_8UC1;
-        combined_frame.convertTo(combined_frame_8UC1, CV_8UC1, 255.0 / 4095.0);
-        Mat color_frame;
-        applyColorMap(combined_frame_8UC1, color_frame, COLORMAP_JET);
-
-        // Añadir frame a la cola de forma segura
-
-        {
-            lock_guard<mutex> lock(queue_mutex);
-            frame_queue.push(color_frame.clone()); // Clonar para evitar aliasing
-        }
-
-        queue_cond.notify_one();
-    }
-
-    // Señalizar fin del procesamiento
-
-    {
-        lock_guard<mutex> lock(queue_mutex);
-        processing_done = true;
-    }
-
-    queue_cond.notify_one();
-
-    // Esperar a que el hilo escritor termine
-    writer_thread.join();
-    cout << "Animación combinada guardada como " << filename << endl;
 }
 
 //__________________________________________________________________________________________________
@@ -432,188 +241,219 @@ void usingThreads(int &width, int &height, vector<vector<double>> &pressures, ve
     }
 }
 
-// ------------------------------------------------------------------
-
-// Función para conectarse a Redis y obtener los datos CSV
-vector<vector<double>> getCSVFromRedis(const string &key, const string &redis_host = "localhost", int redis_port = 6379) //&redis_host = "redis_container",
+// Función para convertir una imagen en escala de grises (CV_8UC1) a una imagen a color usando un mapeo personalizado
+Mat applyCustomColorMap(const Mat &grayImage)
 {
-    redisContext *c = redisConnect(redis_host.c_str(), redis_port);
-    if (c == NULL || c->err)
+    // Definir los puntos de control y sus colores (en formato hexadecimal convertido a BGR)
+    // Los colores se definen de la siguiente manera:
+    // - "#0000FF" (azul): en BGR es (255, 0, 0)
+    // - "#00FFFF" (cian): en BGR es (255, 255, 0)
+    // - "#00FF00" (verde): en BGR es (0, 255, 0)
+    // - "#FFFF00" (amarillo): en BGR es (0, 255, 255)
+    // - "#FFA500" (naranja): en BGR es (0, 165, 255)
+    // - "#FF4500" (rojo anaranjado): en BGR es (0, 69, 255)
+    // - "#FF0000" (rojo): en BGR es (0, 0, 255)
+    // - "#8B0000" (rojo oscuro): en BGR es (0, 0, 139)
+
+    vector<int> stops = {0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4095};
+    vector<Vec3b> colors;
+    colors.push_back(Vec3b(255, 0, 0));   // 0: "#0000FF"
+    colors.push_back(Vec3b(255, 0, 0));   // 500: "#0000FF"
+    colors.push_back(Vec3b(255, 255, 0)); // 1000: "#00FFFF"
+    colors.push_back(Vec3b(0, 255, 0));   // 1500: "#00FF00"
+    colors.push_back(Vec3b(0, 255, 255)); // 2000: "#FFFF00"
+    colors.push_back(Vec3b(0, 165, 255)); // 2500: "#FFA500"
+    colors.push_back(Vec3b(0, 69, 255));  // 3000: "#FF4500"
+    colors.push_back(Vec3b(0, 0, 255));   // 3500: "#FF0000"
+    colors.push_back(Vec3b(0, 0, 139));   // 4000: "#8B0000"
+    colors.push_back(Vec3b(0, 0, 139));   // 4095: "#8B0000"
+
+    // Crear la imagen de salida (3 canales, 8 bits)
+    Mat colorImage(grayImage.size(), CV_8UC3);
+
+    // Recorrer cada píxel y asignar el color interpolado según el rango
+    for (int i = 0; i < grayImage.rows; i++)
     {
-        if (c)
+        for (int j = 0; j < grayImage.cols; j++)
         {
-            cerr << "Error: " << c->errstr << endl;
-            redisFree(c);
-        }
-        else
-        {
-            cerr << "Error: No se pudo asignar el contexto Redis" << endl;
-        }
-        exit(1);
-    }
+            // Obtenemos el valor del píxel
+            int value = static_cast<int>(grayImage.at<uchar>(i, j));
+            // Convertir el valor (0-255) a la escala original (0-4095)
+            double scaledValue = value * (4095.0 / 255.0);
 
-    // Ejecutar comando GET en Redis
-    redisReply *reply = (redisReply *)redisCommand(c, "GET %s", key.c_str());
-    if (reply == NULL || reply->type == REDIS_REPLY_NIL)
-    {
-        cerr << "Error: No se encontró la clave " << key << " en Redis." << endl;
-        redisFree(c);
-        return {};
-    }
-
-    // Convertir la respuesta de Redis en una cadena CSV
-    string csv_data(reply->str);
-    freeReplyObject(reply);
-    redisFree(c);
-
-    // Convertir CSV en matriz de datos
-    vector<vector<double>> data;
-    istringstream stream(csv_data);
-    string line;
-
-    while (getline(stream, line))
-    {
-        vector<double> row;
-        istringstream lineStream(line);
-        string value;
-
-        while (getline(lineStream, value, ','))
-        {
-            try
+            Vec3b color;
+            if (scaledValue <= stops.front())
             {
-                row.push_back(stod(value)); // Convertir a double
+                color = colors.front();
             }
-            catch (const invalid_argument &e)
+            else if (scaledValue >= stops.back())
             {
-                cerr << "Error en conversión de datos: " << value << endl;
-                row.push_back(0.0);
+                color = colors.back();
             }
-        }
-        data.push_back(row);
-    }
-
-    return data;
-}
-
-void readFromRedisDBEncapsulation(vector<vector<double>> &pressures_left, vector<vector<double>> &pressures_right)
-{
-    pressures_left = getCSVFromRedis("r");
-    pressures_right = getCSVFromRedis("l");
-}
-
-// -----------------------------------------------------------------------------
-void consumeFromQueue(const std::string &queue)
-{
-    redisContext *context = redisConnect("redis_container", 6379);
-    if (context == nullptr || context->err)
-    {
-        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
-        return;
-    }
-
-    std::string lastID = "0"; // Comenzar desde el inicio
-
-    while (true)
-    {
-        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
-        // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
-        redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
-
-        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
-        {
-            for (size_t i = 0; i < reply->elements; i++)
+            else
             {
-                redisReply *stream = reply->element[i];
-                if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
+                // Buscar entre qué dos paradas se encuentra el valor
+                for (size_t k = 0; k < stops.size() - 1; k++)
                 {
-                    redisReply *streamName = stream->element[0];
-                    redisReply *messages = stream->element[1];
-
-                    for (size_t j = 0; j < messages->elements; j++)
+                    if (scaledValue >= stops[k] && scaledValue < stops[k + 1])
                     {
-                        redisReply *message = messages->element[j];
-
-                        if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
-                        {
-                            redisReply *msgID = message->element[0];
-                            redisReply *msgData = message->element[1];
-
-                            std::string lado1, datos1, lado2, datos2;
-
-                            if (msgID->type == REDIS_REPLY_STRING)
-                            {
-                                lastID = msgID->str; // Guardamos el último ID leído
-                                std::cout << "📩 Mensaje recibido (" << lastID << "): ";
-
-                                for (size_t k = 0; k < msgData->elements; k += 2)
-                                {
-                                    redisReply *field = msgData->element[k];
-                                    redisReply *value = msgData->element[k + 1];
-
-                                    if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
-                                    {
-                                        if (std::string(field->str) == "id1")
-                                            lado1 = value->str;
-                                        if (std::string(field->str) == "id2")
-                                            datos1 = value->str;
-                                        if (std::string(field->str) == "id3")
-                                            lado2 = value->str;
-                                    }
-                                }
-
-                                // Imprimir el par de valores
-                                std::cout << "[(" << lado1 << ", " << datos1 << "), (" << lado2 << ", " << datos2 << ")]" << std::endl;
-                            }
-                        }
+                        // Interpolación lineal entre colors[k] y colors[k+1]
+                        double t = (scaledValue - stops[k]) / static_cast<double>(stops[k + 1] - stops[k]);
+                        color[0] = static_cast<uchar>((1 - t) * colors[k][0] + t * colors[k + 1][0]);
+                        color[1] = static_cast<uchar>((1 - t) * colors[k][1] + t * colors[k + 1][1]);
+                        color[2] = static_cast<uchar>((1 - t) * colors[k][2] + t * colors[k + 1][2]);
+                        break;
                     }
                 }
             }
-        }
-
-        if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
-        {
-            freeReplyObject(reply);
+            colorImage.at<Vec3b>(i, j) = color;
         }
     }
+    return colorImage;
+}
 
-    redisFree(context);
+void generate_combined_animation_sequential(
+    const vector<Mat> &frames_left,
+    const vector<Mat> &frames_right,
+    const string &filename,
+    vector<pair<double, double>> &coordinates_left,
+    vector<pair<double, double>> &coordinates_right,
+    double fps = 50.0)
+{
+    if (frames_left.empty() || frames_right.empty())
+    {
+        cerr << "No hay cuadros para guardar." << endl;
+        return;
+    }
+
+    // Resolución combinada (se mantiene igual para que se vean los sensores)
+    int width = frames_left[0].cols + frames_right[0].cols;
+    int height = frames_left[0].rows;
+
+    // Construir el comando para FFmpeg (ajustando parámetros para reducir calidad)
+    string cmd = "ffmpeg -y -threads 1 -f rawvideo -pixel_format bgr24 -video_size " +
+                 to_string(width) + "x" + to_string(height) +
+                 " -framerate " + to_string(fps) +
+                 " -i pipe:0 -c:v libx264 -preset fast -crf 28 -b:v 500k -pix_fmt yuv420p \"" + filename + "\"";
+
+    // Abrir el pipe hacia FFmpeg
+    FILE *ffmpeg_pipe = popen(cmd.c_str(), "w");
+    if (!ffmpeg_pipe)
+    {
+        cerr << "Error: No se pudo iniciar FFmpeg." << endl;
+        return;
+    }
+
+    ofstream dataFile("animation_data_log.txt");
+    if (!dataFile.is_open())
+    {
+        cerr << "No se pudo abrir el archivo de datos." << endl;
+    }
+
+    // Procesar cada frame secuencialmente para mantener el orden
+    for (size_t i = 0; i < frames_left.size(); ++i)
+    {
+        dataFile << "Frame " << i << ":\n";
+
+        // Datos de los sensores del lado izquierdo
+        dataFile << "  Izquierda:\n";
+        for (size_t j = 0; j < coordinates_left.size(); ++j)
+        {
+            // Se asume que pressures_left[i] tiene al menos coordinates_left.size() elementos
+            dataFile << "    Sensor " << j
+                     << " - Coordenadas: (" << coordinates_left[j].first << ", " << coordinates_left[j].second << ")"
+                     << " | Presión: " << frames_left[i] << "\n";
+        }
+
+        // Datos de los sensores del lado derecho
+        dataFile << "  Derecha:\n";
+        for (size_t j = 0; j < coordinates_right.size(); ++j)
+        {
+            // Se asume que pressures_right[i] tiene al menos coordinates_right.size() elementos
+            dataFile << "    Sensor " << j
+                     << " - Coordenadas: (" << coordinates_right[j].first << ", " << coordinates_right[j].second << ")"
+                     << " | Presión: " << frames_right[i] << "\n";
+        }
+        dataFile << "\n";
+        // Combinar horizontalmente el frame izquierdo y derecho
+        Mat combined_frame;
+        hconcat(frames_left[i], frames_right[i], combined_frame);
+
+        // Convertir a 8 bits (necesario para aplicar el colormap)
+        Mat combined_frame_8UC1;
+        combined_frame.convertTo(combined_frame_8UC1, CV_8UC1, 255.0 / 4095.0);
+
+        // Aplicar el colormap personalizado
+        Mat color_frame = applyCustomColorMap(combined_frame_8UC1);
+
+        // Dibujar los sensores en la parte izquierda
+        visualize_heatmap(color_frame, coordinates_left);
+
+        // Ajustar las coordenadas para la parte derecha sumando el ancho del frame izquierdo
+        vector<pair<double, double>> coordinates_right_offset;
+        for (const auto &pt : coordinates_right)
+        {
+            coordinates_right_offset.emplace_back(pt.first + frames_left[0].cols, pt.second);
+        }
+        visualize_heatmap(color_frame, coordinates_right_offset);
+
+        // Aplicar el efecto de pixelación:
+        double scaleFactor = 0.05; // Ajusta este valor para modificar el grado de pixelación
+        Mat reduced;
+        resize(color_frame, reduced, Size(), scaleFactor, scaleFactor, INTER_NEAREST);
+        Mat pixelated;
+        resize(reduced, pixelated, color_frame.size(), 0, 0, INTER_NEAREST);
+
+        // Escribir el frame directamente en el pipe de FFmpeg
+        size_t bytes_written = fwrite(color_frame.data, 1, color_frame.total() * color_frame.elemSize(), ffmpeg_pipe);
+        if (bytes_written != color_frame.total() * color_frame.elemSize())
+        {
+            cerr << "Error al escribir el frame " << i << endl;
+        }
+    }
+    dataFile.close();
+
+    // Cerrar el pipe para finalizar la escritura del video
+    pclose(ffmpeg_pipe);
+    cout << "Animación combinada guardada como " << filename << endl;
 }
 
 int main()
 {
     // Parámetros iniciales
     // int width = 350, height = 1040;
-    // int width = 175, height = 520;
-    // vector<pair<double, double>> coordinates_left;                                                            // Ejemplo de coordenadas
-    // vector<pair<double, double>> coordinates_right;                                                           // Ejemplo de coordenadas
-    // readCoordinatesEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right); // Revisar esto, pq estoyu
+    int width = 175, height = 520;
 
-    // // vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
-    // // vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
+    vector<pair<double, double>> coordinates_left;                                                            // Ejemplo de coordenadas
+    vector<pair<double, double>> coordinates_right;                                                           // Ejemplo de coordenadas
+    readCoordinatesEncapsulation("leftPoints.json", coordinates_left, "rightPoints.json", coordinates_right); // Revisar esto, pq estoyu
+
+    vector<vector<double>> pressures_left = read_csv("left.csv");   // Ejemplo de presiones
+    vector<vector<double>> pressures_right = read_csv("right.csv"); // Ejemplo de presiones
 
     // vector<vector<double>> pressures_left;  // Ejemplo de presiones
     // vector<vector<double>> pressures_right; // Ejemplo de presiones
     // readFromRedisDBEncapsulation(pressures_left, pressures_right);
 
-    // vector<Mat> frames_left, frames_right;
+    vector<Mat> frames_left, frames_right;
 
-    // std::thread right([&]()
-    //                   { usingThreads(width, height, pressures_right, coordinates_right, frames_right); }); // spawn new thread that calls usingThreads for the right side
+    std::thread right([&]()
+                      { usingThreads(width, height, pressures_right, coordinates_right, frames_right); }); // spawn new thread that calls usingThreads for the right side
 
-    // std::thread left([&]()
-    //                  { usingThreads(width, height, pressures_left, coordinates_left, frames_left); }); // spawn new thread that calls usingThreads for the left side
+    std::thread left([&]()
+                     { usingThreads(width, height, pressures_left, coordinates_left, frames_left); }); // spawn new thread that calls usingThreads for the left side
 
-    // // synchronize threads:
-    // right.join(); // pauses until first finishes
-    // left.join();  // pauses until second finishes
+    // synchronize threads:
+    right.join(); // pauses until first finishes
+    left.join();  // pauses until second finishes
 
-    // // Generar la animación combinada
-    // generate_combined_animation(frames_left, frames_right, "combined_pressure_animation_paralelizado.mp4", 50.0);
-
+    // Generar la animación combinada
+    // generate_combined_animation(frames_left, frames_right, "combined_pressure_animation_paralelizado.mp4", coordinates_left, coordinates_right, 50.0);
+    generate_combined_animation_sequential(frames_left, frames_right, "combined_pressure_animation_paralelizado.mp4", coordinates_left, coordinates_right, 50);
     // Definición de la variable global
-    const std::string queue = "redis_queue";
+    // const std::string queue = "redis_queue";
 
-    consumeFromQueue(queue);
+    // consumeFromQueue(queue);
 
     return 0;
 }
