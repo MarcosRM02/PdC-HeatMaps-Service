@@ -14,6 +14,8 @@
 // RapidJSON
 #include <rapidjson/document.h>
 
+#include <hiredis/hiredis.h> // Incluir hiredis para Redis
+
 using namespace std;
 using namespace cv;
 using namespace rapidjson;
@@ -398,6 +400,128 @@ void generate_combined_animation_JET(
 }
 
 //------------------------------------------------------------
+// 9) Conexion a la BD Redis para obtener los id de las insoles
+//------------------------------------------------------------
+
+redisContext *connectToRedis(const std::string &host, int port)
+{
+    redisContext *context = redisConnect(host.c_str(), port);
+    if (context == nullptr || context->err)
+    {
+        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+        return nullptr;
+    }
+    return context;
+}
+
+//------------------------------------------------------------
+// 10) Leer datos de la cola de mensajes por medio de un mecanismo de espera pasiva
+//------------------------------------------------------------
+
+redisReply *readFromStream(redisContext *context, const std::string &queue, const std::string &lastID)
+{
+    return (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
+}
+
+//------------------------------------------------------------
+// 11) Procesar el mensaje recibido de la cola
+//------------------------------------------------------------
+
+void processMessage(redisReply *msgData, int &wearableId_L, int &wearableId_R, int &experimentId, int &participantId, int &sWId, int &trialId)
+{
+    for (size_t k = 0; k < msgData->elements; k += 2)
+    {
+        redisReply *field = msgData->element[k];
+        redisReply *value = msgData->element[k + 1];
+
+        if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
+        {
+            if (std::string(field->str) == "wearableId_L")
+                wearableId_L = std::stoi(value->str);
+            else if (std::string(field->str) == "wearableId_R")
+                wearableId_R = std::stoi(value->str);
+            else if (std::string(field->str) == "experimentId")
+                experimentId = std::stoi(value->str);
+            else if (std::string(field->str) == "participantId")
+                participantId = std::stoi(value->str);
+            else if (std::string(field->str) == "sWId")
+                sWId = std::stoi(value->str);
+            else if (std::string(field->str) == "trialId")
+                trialId = std::stoi(value->str);
+        }
+    }
+}
+
+void processStream(redisReply *stream, std::string &lastID)
+{
+    if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
+    {
+        redisReply *streamName = stream->element[0];
+        redisReply *messages = stream->element[1];
+
+        for (size_t j = 0; j < messages->elements; j++)
+        {
+            redisReply *message = messages->element[j];
+
+            if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
+            {
+                redisReply *msgID = message->element[0];
+                redisReply *msgData = message->element[1];
+
+                int wearableId_L = -1, wearableId_R = -1, experimentId = -1, participantId = -1, sWId = -1, trialId = -1;
+
+                if (msgID->type == REDIS_REPLY_STRING)
+                {
+                    lastID = msgID->str; // Guardamos el último ID leído
+                    std::cout << "📩 Mensaje recibido (" << lastID << "): ";
+
+                    processMessage(msgData, wearableId_L, wearableId_R, experimentId, participantId, sWId, trialId);
+
+                    // Imprimir el par de valores
+                    std::cout << "wearableId_L: " << wearableId_L << ", wearableId_R: " << wearableId_R
+                              << ", experimentId: " << experimentId << ", participantId: " << participantId
+                              << ", sWId: " << sWId << ", trialId: " << trialId << std::endl;
+
+                    // AQUI VA LA PARTE DE LA SOLICITUD HTTP A LA API
+                }
+            }
+        }
+    }
+}
+
+void consumeFromQueue(const std::string &queue)
+{
+    redisContext *context = connectToRedis("localhost", 6379); // cambiar loclahost a redis-contaner cuando meta esto en docker
+    if (context == nullptr)
+        return;
+
+    std::string lastID = "0"; // Comenzar desde el inicio
+
+    while (true)
+    {
+        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
+        // Método de espera pasiva para los contenidos de la cola
+        redisReply *reply = readFromStream(context, queue, lastID);
+
+        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        {
+            for (size_t i = 0; i < reply->elements; i++)
+            {
+                redisReply *stream = reply->element[i];
+                processStream(stream, lastID);
+            }
+        }
+
+        if (reply)
+        {
+            freeReplyObject(reply);
+        }
+    }
+
+    redisFree(context);
+}
+
+//------------------------------------------------------------
 // 8) MAIN de ejemplo
 //------------------------------------------------------------
 int main()
@@ -409,7 +533,7 @@ int main()
     int gridH = 69;
     double radius = 70.0;
     double smoothness = 2.0;
-    double fps = 32.0;
+    double fps = 50.0;
     int numThreads = 4;
 
     // Ancho total de la leyenda (p.ej. 80 px para la banda + texto)
@@ -424,19 +548,26 @@ int main()
     vector<vector<double>> pressures_left = read_csv("left.csv");
     vector<vector<double>> pressures_right = read_csv("right.csv");
 
+    const std::string queue = "redis_queue_prueba";
+
+    consumeFromQueue(queue);
+
     // 3) Generar animación
-    generate_combined_animation_JET(
-        pressures_left,
-        pressures_right,
-        coords_left,
-        coords_right,
-        "Fn1.mp4",
-        wFinal, hFinal,
-        gridW, gridH,
-        radius, smoothness,
-        fps,
-        numThreads,
-        legendWidth);
+
+    // LO COMENTO PARA PROBAR LA PARTE DE REDIS
+
+    // generate_combined_animation_JET(
+    //     pressures_left,
+    //     pressures_right,
+    //     coords_left,
+    //     coords_right,
+    //     "S1.mp4",
+    //     wFinal, hFinal,
+    //     gridW, gridH,
+    //     radius, smoothness,
+    //     fps,
+    //     numThreads,
+    //     legendWidth);
 
     return 0;
 }
