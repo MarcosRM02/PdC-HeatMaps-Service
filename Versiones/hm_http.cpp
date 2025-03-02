@@ -33,7 +33,7 @@ constexpr double fps = 32.0;
 constexpr int numThreads = 4;
 constexpr int legendWidth = 80;
 const std::string baseUrl = "http://localhost:3000/swData/generateCSV/"; // http://ssith-backend-container:3000
-const std::string redisQueue = "redis_queue_prueba";
+const std::string redisQueue = "redis_queue";
 
 //------------------------------------------------------------
 // 1) Leer coordenadas (JSON)
@@ -670,6 +670,8 @@ void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_lef
         fps,
         numThreads,
         legendWidth);
+
+    // Escribir en la postgress, la direccion del video generado
 }
 
 //------------------------------------------------------------
