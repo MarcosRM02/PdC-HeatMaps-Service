@@ -22,6 +22,19 @@ using namespace std;
 using namespace cv;
 using namespace rapidjson;
 
+// constexpr asegura que se evalúe en tiempo de compilación, lo cual puede ayudar al compilador a optimizar el código
+constexpr int wFinal = 175;
+constexpr int hFinal = 520;
+constexpr int gridW = 20;
+constexpr int gridH = 69;
+constexpr double radius = 70.0;
+constexpr double smoothness = 2.0;
+constexpr double fps = 32.0;
+constexpr int numThreads = 4;
+constexpr int legendWidth = 80;
+const std::string baseUrl = "http://localhost:3000/swData/generateCSV/"; // http://ssith-backend-container:3000
+const std::string redisQueue = "redis_queue_prueba";
+
 //------------------------------------------------------------
 // 1) Leer coordenadas (JSON)
 //------------------------------------------------------------
@@ -420,16 +433,16 @@ redisContext *connectToRedis(const std::string &host, int port)
 // 10) Leer datos de la cola de mensajes por medio de un mecanismo de espera pasiva
 //------------------------------------------------------------
 
-redisReply *readFromStream(redisContext *context, const std::string &queue, const std::string &lastID)
+redisReply *readFromStream(redisContext *context, const std::string &lastID)
 {
-    return (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
+    return (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", redisQueue.c_str(), lastID.c_str());
 }
 
 //------------------------------------------------------------
 // 11) Procesar el mensaje recibido de la cola
 //------------------------------------------------------------
 
-void processMessage(redisReply *msgData, int &wearableId_L, int &wearableId_R, int &experimentId, int &participantId, int &sWId, int &trialId)
+void processMessage(redisReply *msgData, string &wearableId_L, string &wearableId_R, string &experimentId, string &participantId, string &sWId, string &trialId)
 {
     for (size_t k = 0; k < msgData->elements; k += 2)
     {
@@ -439,58 +452,17 @@ void processMessage(redisReply *msgData, int &wearableId_L, int &wearableId_R, i
         if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
         {
             if (std::string(field->str) == "wearableId_L")
-                wearableId_L = std::stoi(value->str);
+                wearableId_L = std::string(value->str);
             else if (std::string(field->str) == "wearableId_R")
-                wearableId_R = std::stoi(value->str);
+                wearableId_R = std::string(value->str);
             else if (std::string(field->str) == "experimentId")
-                experimentId = std::stoi(value->str);
+                experimentId = std::string(value->str);
             else if (std::string(field->str) == "participantId")
-                participantId = std::stoi(value->str);
+                participantId = std::string(value->str);
             else if (std::string(field->str) == "sWId")
-                sWId = std::stoi(value->str);
+                sWId = std::string(value->str);
             else if (std::string(field->str) == "trialId")
-                trialId = std::stoi(value->str);
-        }
-    }
-}
-
-//------------------------------------------------------------
-// 12) Procesar el Stream del mensaje de la cola
-//------------------------------------------------------------
-
-void processStream(redisReply *stream, std::string &lastID)
-{
-    if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
-    {
-        redisReply *streamName = stream->element[0];
-        redisReply *messages = stream->element[1];
-
-        for (size_t j = 0; j < messages->elements; j++)
-        {
-            redisReply *message = messages->element[j];
-
-            if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
-            {
-                redisReply *msgID = message->element[0];
-                redisReply *msgData = message->element[1];
-
-                int wearableId_L = -1, wearableId_R = -1, experimentId = -1, participantId = -1, sWId = -1, trialId = -1;
-
-                if (msgID->type == REDIS_REPLY_STRING)
-                {
-                    lastID = msgID->str; // Guardamos el último ID leído
-                    std::cout << "📩 Mensaje recibido (" << lastID << "): ";
-
-                    processMessage(msgData, wearableId_L, wearableId_R, experimentId, participantId, sWId, trialId);
-
-                    // Imprimir el par de valores
-                    std::cout << "wearableId_L: " << wearableId_L << ", wearableId_R: " << wearableId_R
-                              << ", experimentId: " << experimentId << ", participantId: " << participantId
-                              << ", sWId: " << sWId << ", trialId: " << trialId << std::endl;
-
-                    // AQUI VA LA PARTE DE LA SOLICITUD HTTP A LA API, obtengo los csv, y ya genero las animaciones con el metodo existente.
-                }
-            }
+                trialId = std::string(value->str);
         }
     }
 }
@@ -499,43 +471,12 @@ void processStream(redisReply *stream, std::string &lastID)
 // 13) Creacion del consumidor de la cola redis
 //------------------------------------------------------------
 
-void consumeFromQueue(const std::string &queue)
+void readCoordinates(vector<pair<double, double>> &coords_left, vector<pair<double, double>> &coords_right)
 {
-    redisContext *context = connectToRedis("localhost", 6379); // cambiar loclahost a redis-contaner cuando meta esto en docker
-    if (context == nullptr)
-        return;
+    // 1) Cargar coords (JSON)
 
-    std::string lastID = "0"; // Comenzar desde el inicio
-
-    while (true)
-    {
-        // Verificar si sigue activa la conexión
-        if (context == nullptr || context->err)
-        {
-            cerr << "❌ La conexión con Redis se perdió. Saliendo..." << endl;
-            break;
-        }
-
-        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
-        // Método de espera pasiva para los contenidos de la cola
-        redisReply *reply = readFromStream(context, queue, lastID);
-
-        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
-        {
-            for (size_t i = 0; i < reply->elements; i++)
-            {
-                redisReply *stream = reply->element[i];
-                processStream(stream, lastID);
-            }
-        }
-
-        if (reply)
-        {
-            freeReplyObject(reply);
-        }
-    }
-
-    redisFree(context);
+    read_coordinates("leftPoints.json", coords_left);
+    read_coordinates("rightPoints.json", coords_right);
 }
 
 //------------------------------------------------------------
@@ -551,79 +492,12 @@ size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *out
 }
 
 // Función para convertir un vector de IDs en la estructura correcta de Query Params
-std::string buildWearableIdsQuery(const std::vector<std::string> &wearableIds)
+std::string buildWearableIdsQuery(const std::string &wearableIdL, const std::string &wearableIdR)
 {
     std::ostringstream oss;
-    for (size_t i = 0; i < wearableIds.size(); ++i)
-    {
-        if (i > 0)
-            oss << "&"; // Agrega '&' entre cada parámetro
-        oss << "wearableIds=" << wearableIds[i];
-    }
+    oss << "wearableIds=" << wearableIdL << "&wearableIds=" << wearableIdR;
     return oss.str();
 }
-
-//------------------------------------------------------------
-// 15) Leer CSV: filas = frames, columnas = sensores
-//------------------------------------------------------------
-
-// Función para convertir un CSV en vector<vector<double>>
-std::vector<std::vector<int>> parseCSV(const std::string &csvData)
-{
-    std::vector<std::vector<int>> data;
-    std::stringstream ss(csvData);
-    std::string line;
-    while (std::getline(ss, line))
-    {
-        std::vector<int> row;
-        std::stringstream lineStream(line);
-        std::string value;
-        while (std::getline(lineStream, value, ','))
-        {
-            try
-            {
-                row.push_back(std::stoi(value));
-            }
-            catch (...)
-            {
-                row.push_back(0); // Valor por defecto
-            }
-        }
-        data.push_back(row);
-    }
-    return data;
-}
-// Función auxiliar para procesar cada parte del arreglo (string separado por comas y entre comillas)
-// Se encarga de extraer cada elemento (fila) y unirlos con "\n".
-std::string processPart(const std::string &part)
-{
-    std::string result;
-    size_t pos = 0;
-    bool firstRow = true;
-    while (pos < part.size())
-    {
-        // Buscar la comilla de inicio
-        size_t startQuote = part.find('"', pos);
-        if (startQuote == std::string::npos)
-            break;
-        // Buscar la comilla de cierre
-        size_t endQuote = part.find('"', startQuote + 1);
-        if (endQuote == std::string::npos)
-            break;
-        // Extraer el contenido entre comillas
-        std::string row = part.substr(startQuote + 1, endQuote - startQuote - 1);
-        if (!firstRow)
-            result += "\n";
-        result += row;
-        firstRow = false;
-        pos = endQuote + 1;
-        // Saltar comas o espacios que puedan haber
-        while (pos < part.size() && (part[pos] == ',' || std::isspace(part[pos])))
-            pos++;
-    }
-    return result;
-}
-
 // Realizar la petición HTTP y obtener la respuesta en un string.
 std::string fetchUrlContent(const std::string &url)
 {
@@ -658,7 +532,7 @@ std::string extractContent(const std::string &rawResponse)
     return rawResponse.substr(2, rawResponse.size() - 4);
 }
 
-// Módulo 3: Separar el contenido en dos partes (izquierda y derecha).
+// Separar el contenido en dos partes (izquierda y derecha).
 std::pair<std::string, std::string> splitCSVContent(const std::string &content)
 {
     size_t delimiterPos = content.find("],");
@@ -684,14 +558,76 @@ std::pair<std::string, std::string> splitCSVContent(const std::string &content)
     return {firstPart, secondPart};
 }
 
+// Función auxiliar para procesar cada parte del arreglo (string separado por comas y entre comillas)
+// Se encarga de extraer cada elemento (fila) y unirlos con "\n".
+std::string processPart(const std::string &part)
+{
+    std::string result;
+    size_t pos = 0;
+    bool firstRow = true;
+    while (pos < part.size())
+    {
+        // Buscar la comilla de inicio
+        size_t startQuote = part.find('"', pos);
+        if (startQuote == std::string::npos)
+            break;
+        // Buscar la comilla de cierre
+        size_t endQuote = part.find('"', startQuote + 1);
+        if (endQuote == std::string::npos)
+            break;
+        // Extraer el contenido entre comillas
+        std::string row = part.substr(startQuote + 1, endQuote - startQuote - 1);
+        if (!firstRow)
+            result += "\n";
+        result += row;
+        firstRow = false;
+        pos = endQuote + 1;
+        // Saltar comas o espacios que puedan haber
+        while (pos < part.size() && (part[pos] == ',' || std::isspace(part[pos])))
+            pos++;
+    }
+    return result;
+}
+
+//------------------------------------------------------------
+// 15) Leer CSV: filas = frames, columnas = sensores
+//------------------------------------------------------------
+
+// Función para convertir un CSV en vector<vector<double>>
+std::vector<std::vector<int>> parseCSV(const std::string &csvData)
+{
+    std::vector<std::vector<int>> data;
+    std::stringstream ss(csvData);
+    std::string line;
+    while (std::getline(ss, line))
+    {
+        std::vector<int> row;
+        std::stringstream lineStream(line);
+        std::string value;
+        while (std::getline(lineStream, value, ','))
+        {
+            try
+            {
+                row.push_back(std::stoi(value));
+            }
+            catch (...)
+            {
+                row.push_back(0); // Valor por defecto
+            }
+        }
+        data.push_back(row);
+    }
+    return data;
+}
+
 void fetchCSV(
     const std::string &baseUrl, const std::string &experimentId,
     const std::string &participantId, const std::string &swId,
-    const std::string &trialId, const std::vector<std::string> &wearableIds, std::vector<std::vector<int>> &pressures_left, std::vector<std::vector<int>> &pressures_right)
+    const std::string &trialId, const std::string &wearableIdL, const std::string &wearableIdR, std::vector<std::vector<int>> &pressures_left, std::vector<std::vector<int>> &pressures_right)
 {
     // Construir la URL
-    std::string wearableIdsQuery = buildWearableIdsQuery(wearableIds);
-    std::string url = baseUrl + "swData/generateCSV/" + experimentId + "/" +
+    std::string wearableIdsQuery = buildWearableIdsQuery(wearableIdL, wearableIdR);
+    std::string url = baseUrl + experimentId + "/" +
                       participantId + "/" + swId + "/" + trialId + "?" + wearableIdsQuery;
 
     // Módulo 1: Obtener la respuesta HTTP.
@@ -715,68 +651,13 @@ void fetchCSV(
 // 16) Encapsulación de la solicitud de csv y generación de la animación
 //------------------------------------------------------------
 
-// void fetchCSVAndGenerateAnimation()
-// {
-//     // 1) Cargar coords (JSON)
-//     vector<pair<double, double>> coords_left, coords_right;
-//     std::vector<std::vector<int>> pressures_left, pressures_right;
-//     std::string baseUrl = "http://localhost:3000/"; // http://ssith-backend-container:3000
-//     fetchCSV(baseUrl, "1", "1", "1", "30", {"1", "2"}, pressures_left, pressures_right);
-//     generate_combined_animation_JET(
-//         pressures_left,
-//         pressures_right,
-//         coords_left,
-//         coords_right,
-//         "S1_http.mp4",
-//         wFinal, hFinal,
-//         gridW, gridH,
-//         radius, smoothness,
-//         fps,
-//         numThreads,
-//         legendWidth);
-// }
-//------------------------------------------------------------
-// 8) MAIN de ejemplo
-//------------------------------------------------------------
-int main()
+void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_left, const vector<pair<double, double>> &coords_right, const string &wearableId_L, const string &wearableId_R, const string &experimentId,
+                                  const string &participantId, const string &swId, const string &trialId)
 {
-    // Ajusta según tu caso
-    int wFinal = 175;
-    int hFinal = 520;
-    int gridW = 20;
-    int gridH = 69;
-    double radius = 70.0;
-    double smoothness = 2.0;
-    double fps = 32.0;
-    int numThreads = 4;
-
-    // Ancho total de la leyenda (p.ej. 80 px para la banda + texto)
-    int legendWidth = 80;
-
     // 1) Cargar coords (JSON)
-    vector<pair<double, double>> coords_left, coords_right;
     std::vector<std::vector<int>> pressures_left, pressures_right;
 
-    const std::string queue = "redis_queue_prueba";
-
-    std::string baseUrl = "http://localhost:3000/"; // http://ssith-backend-container:3000
-
-    read_coordinates("leftPoints.json", coords_left);
-    read_coordinates("rightPoints.json", coords_right);
-
-    // 2) Cargar CSV
-    // vector<vector<double>> pressures_left = read_csv("left.csv");
-    // vector<vector<double>> pressures_right = read_csv("right.csv");
-
-    // Llamar a la función fetchCSV
-    fetchCSV(baseUrl, "1", "1", "1", "30", {"1", "2"}, pressures_left, pressures_right);
-
-    // consumeFromQueue(queue);
-
-    // 3) Generar animación
-
-    // LO COMENTO PARA PROBAR LA PARTE DE REDIS
-
+    fetchCSV(baseUrl, experimentId, participantId, swId, trialId, wearableId_L, wearableId_R, pressures_left, pressures_right);
     generate_combined_animation_JET(
         pressures_left,
         pressures_right,
@@ -789,6 +670,116 @@ int main()
         fps,
         numThreads,
         legendWidth);
+}
+
+//------------------------------------------------------------
+// 119) Eliminar los datos de la cola que ya han sido procesados
+//------------------------------------------------------------
+
+void deleteFromQueue(redisContext *context, const std::string &lastID)
+{
+    // Eliminar el mensaje de la cola
+    redisReply *delReply = (redisReply *)redisCommand(
+        context,
+        "XDEL %s %s",
+        redisQueue.c_str(),
+        lastID.c_str());
+    if (delReply)
+        freeReplyObject(delReply);
+}
+
+//------------------------------------------------------------
+// 12) Procesar el Stream del mensaje de la cola
+//------------------------------------------------------------
+
+void processStream(redisReply *stream, redisContext *context, std::string &lastID, const vector<pair<double, double>> &coords_left, const vector<pair<double, double>> &coords_right)
+{
+    if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
+    {
+        redisReply *streamName = stream->element[0];
+        redisReply *messages = stream->element[1];
+
+        for (size_t j = 0; j < messages->elements; j++)
+        {
+            redisReply *message = messages->element[j];
+
+            if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
+            {
+                redisReply *msgID = message->element[0];
+                redisReply *msgData = message->element[1];
+
+                string wearableIdL, wearableIdR, experimentId, participantId, sWId, trialId;
+
+                if (msgID->type == REDIS_REPLY_STRING)
+                {
+                    lastID = msgID->str; // Guardamos el último ID leído
+                    std::cout << "📩 Mensaje recibido (" << lastID << "): ";
+
+                    processMessage(msgData, wearableIdL, wearableIdR, experimentId, participantId, sWId, trialId);
+
+                    // Imprimir el par de valores
+                    std::cout << "wearableId_L: " << wearableIdL << ", wearableId_R: " << wearableIdR
+                              << ", experimentId: " << experimentId << ", participantId: " << participantId
+                              << ", sWId: " << sWId << ", trialId: " << trialId << std::endl;
+
+                    fetchCSVAndGenerateAnimation(coords_left, coords_right, wearableIdL, wearableIdR, experimentId, participantId, sWId, trialId);
+
+                    // Eliminar el mensaje de la cola
+                    deleteFromQueue(context, lastID);
+                }
+            }
+        }
+    }
+}
+
+void consumeFromQueue(const std::string &redisQueue)
+{
+    vector<pair<double, double>> coords_left, coords_right;
+    readCoordinates(coords_left, coords_right);
+    redisContext *context = connectToRedis("localhost", 6379); // cambiar loclahost a redis-contaner cuando meta esto en docker
+    if (context == nullptr)
+        return;
+
+    std::string lastID = "0"; // Comenzar desde el inicio
+
+    while (true)
+    {
+        // Verificar si sigue activa la conexión
+        if (context == nullptr || context->err)
+        {
+            cerr << "❌ La conexión con Redis se perdió. Saliendo..." << endl;
+            break;
+        }
+
+        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
+        // Método de espera pasiva para los contenidos de la cola
+        redisReply *reply = readFromStream(context, lastID);
+
+        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        {
+            for (size_t i = 0; i < reply->elements; i++)
+            {
+                redisReply *stream = reply->element[i];
+                processStream(stream, context, lastID, coords_left, coords_right);
+            }
+        }
+
+        if (reply)
+        {
+            freeReplyObject(reply);
+        }
+    }
+
+    redisFree(context);
+}
+
+//------------------------------------------------------------
+// 8) MAIN de ejemplo
+//------------------------------------------------------------
+int main()
+{
+
+    consumeFromQueue(redisQueue);
 
     return 0;
 }
