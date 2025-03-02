@@ -499,6 +499,13 @@ void consumeFromQueue(const std::string &queue)
 
     while (true)
     {
+
+        if (context == nullptr || context->err)
+        {
+            cerr << "❌ La conexión con Redis se perdió. Saliendo..." << endl;
+            break;
+        }
+
         cout << "🔍 Buscando mensajes en la cola..." << std::endl;
         // Método de espera pasiva para los contenidos de la cola
         redisReply *reply = readFromStream(context, queue, lastID);

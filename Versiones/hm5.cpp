@@ -430,7 +430,7 @@ int main()
         pressures_right,
         coords_left,
         coords_right,
-        "Fn1.mp4",
+        "S1.mp4",
         wFinal, hFinal,
         gridW, gridH,
         radius, smoothness,

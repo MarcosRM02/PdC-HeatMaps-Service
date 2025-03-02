@@ -98,7 +98,7 @@ vector<vector<double>> read_csv(const string &filename)
 //------------------------------------------------------------
 cv::Mat generate_heatmap_jet(
     const vector<pair<double, double>> &coords,
-    const vector<double> &pressures,
+    const vector<int> &pressures,
     int widthFinal,
     int heightFinal,
     int gridW,
@@ -206,7 +206,7 @@ void draw_points_indices(Mat &img, const vector<pair<double, double>> &coords)
 struct ThreadParams
 {
     int startFrame, endFrame;
-    const vector<vector<double>> *pressures;
+    const vector<vector<int>> *pressures;
     const vector<pair<double, double>> *coords;
     vector<Mat> *outFrames;
     int wFinal, hFinal;
@@ -218,7 +218,7 @@ void workerFunction(const ThreadParams &tp)
 {
     for (int f = tp.startFrame; f < tp.endFrame; f++)
     {
-        const vector<double> &framePress = (*tp.pressures)[f];
+        const vector<int> &framePress = (*tp.pressures)[f];
         Mat heatmap = generate_heatmap_jet(
             *(tp.coords),
             framePress,
@@ -314,8 +314,8 @@ void annotate_colorbar(Mat &colorBar,
 // 7) Generar animación final con threads + JET + colorbar
 //------------------------------------------------------------
 void generate_combined_animation_JET(
-    const vector<vector<double>> &pressures_left,
-    const vector<vector<double>> &pressures_right,
+    const vector<vector<int>> &pressures_left,
+    const vector<vector<int>> &pressures_right,
     const vector<pair<double, double>> &coords_left,
     const vector<pair<double, double>> &coords_right,
     const string &outFilename,
@@ -509,6 +509,13 @@ void consumeFromQueue(const std::string &queue)
 
     while (true)
     {
+        // Verificar si sigue activa la conexión
+        if (context == nullptr || context->err)
+        {
+            cerr << "❌ La conexión con Redis se perdió. Saliendo..." << endl;
+            break;
+        }
+
         cout << "🔍 Buscando mensajes en la cola..." << std::endl;
         // Método de espera pasiva para los contenidos de la cola
         redisReply *reply = readFromStream(context, queue, lastID);
@@ -556,43 +563,178 @@ std::string buildWearableIdsQuery(const std::vector<std::string> &wearableIds)
     return oss.str();
 }
 
-// Función para hacer la petición HTTP GET
-std::string fetchCSV(const std::string &baseUrl, const std::string &experimentId,
-                     const std::string &participantId, const std::string &swId,
-                     const std::string &trialId, const std::vector<std::string> &wearableIds)
+//------------------------------------------------------------
+// 15) Leer CSV: filas = frames, columnas = sensores
+//------------------------------------------------------------
+
+// Función para convertir un CSV en vector<vector<double>>
+std::vector<std::vector<int>> parseCSV(const std::string &csvData)
 {
-    CURL *curl;
-    CURLcode res;
+    std::vector<std::vector<int>> data;
+    std::stringstream ss(csvData);
+    std::string line;
+    while (std::getline(ss, line))
+    {
+        std::vector<int> row;
+        std::stringstream lineStream(line);
+        std::string value;
+        while (std::getline(lineStream, value, ','))
+        {
+            try
+            {
+                row.push_back(std::stoi(value));
+            }
+            catch (...)
+            {
+                row.push_back(0); // Valor por defecto
+            }
+        }
+        data.push_back(row);
+    }
+    return data;
+}
+// Función auxiliar para procesar cada parte del arreglo (string separado por comas y entre comillas)
+// Se encarga de extraer cada elemento (fila) y unirlos con "\n".
+std::string processPart(const std::string &part)
+{
+    std::string result;
+    size_t pos = 0;
+    bool firstRow = true;
+    while (pos < part.size())
+    {
+        // Buscar la comilla de inicio
+        size_t startQuote = part.find('"', pos);
+        if (startQuote == std::string::npos)
+            break;
+        // Buscar la comilla de cierre
+        size_t endQuote = part.find('"', startQuote + 1);
+        if (endQuote == std::string::npos)
+            break;
+        // Extraer el contenido entre comillas
+        std::string row = part.substr(startQuote + 1, endQuote - startQuote - 1);
+        if (!firstRow)
+            result += "\n";
+        result += row;
+        firstRow = false;
+        pos = endQuote + 1;
+        // Saltar comas o espacios que puedan haber
+        while (pos < part.size() && (part[pos] == ',' || std::isspace(part[pos])))
+            pos++;
+    }
+    return result;
+}
+
+// Realizar la petición HTTP y obtener la respuesta en un string.
+std::string fetchUrlContent(const std::string &url)
+{
+    CURL *curl = curl_easy_init();
     std::string readBuffer;
-
-    // Construcción correcta de los parámetros en la URL
-    std::string baseUrl = "http://ssith-backend-container:3000/"; // cmbiar a ssith-backend-container:3000 cuando este dockerizado y desplegado
-    std::string wearableIdsQuery = buildWearableIdsQuery(wearableIds);
-    std::string url = baseUrl + "swData/generateCSV/" + experimentId + "/" + participantId + "/" + swId + "/" + trialId + "?" + wearableIdsQuery;
-
-    curl = curl_easy_init();
     if (curl)
     {
-        // Configurar la URL
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
-
-        // Ejecutar la solicitud
-        res = curl_easy_perform(curl);
-
+        CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK)
         {
             std::cerr << "❌ Error en la petición HTTP: " << curl_easy_strerror(res) << std::endl;
         }
-
-        // Liberar memoria
         curl_easy_cleanup(curl);
     }
-
-    return readBuffer; // Devuelve la respuesta del servidor (CSV en formato string)
+    return readBuffer;
 }
 
+// Extraer el contenido interno removiendo los corchetes externos.
+// Se espera que rawResponse tenga el formato: [["fila1 csv1", "fila2 csv1", ...], ["fila1 csv2", "fila2 csv2", ...]]
+std::string extractContent(const std::string &rawResponse)
+{
+    if (rawResponse.size() < 4 ||
+        rawResponse.substr(0, 2) != "[[" ||
+        rawResponse.substr(rawResponse.size() - 2) != "]]")
+    {
+        std::cerr << "❌ Formato de respuesta inesperado." << std::endl;
+        return "";
+    }
+    return rawResponse.substr(2, rawResponse.size() - 4);
+}
+
+// Módulo 3: Separar el contenido en dos partes (izquierda y derecha).
+std::pair<std::string, std::string> splitCSVContent(const std::string &content)
+{
+    size_t delimiterPos = content.find("],");
+    if (delimiterPos == std::string::npos)
+    {
+        std::cerr << "❌ No se encontró el delimitador entre CSVs." << std::endl;
+        return {"", ""};
+    }
+
+    // A veces el delimitador podría tener espacios; buscamos el patrón "],["
+    size_t secondBracketPos = content.find("],[");
+    std::string firstPart, secondPart;
+    if (secondBracketPos != std::string::npos)
+    {
+        firstPart = content.substr(0, secondBracketPos);
+        secondPart = content.substr(secondBracketPos + 3); // +3 para saltar "],["
+    }
+    else
+    {
+        firstPart = content.substr(0, delimiterPos);
+        secondPart = content.substr(delimiterPos + 2);
+    }
+    return {firstPart, secondPart};
+}
+
+void fetchCSV(
+    const std::string &baseUrl, const std::string &experimentId,
+    const std::string &participantId, const std::string &swId,
+    const std::string &trialId, const std::vector<std::string> &wearableIds, std::vector<std::vector<int>> &pressures_left, std::vector<std::vector<int>> &pressures_right)
+{
+    // Construir la URL
+    std::string wearableIdsQuery = buildWearableIdsQuery(wearableIds);
+    std::string url = baseUrl + "swData/generateCSV/" + experimentId + "/" +
+                      participantId + "/" + swId + "/" + trialId + "?" + wearableIdsQuery;
+
+    // Módulo 1: Obtener la respuesta HTTP.
+    std::string rawResponse = fetchUrlContent(url);
+
+    // Módulo 2: Extraer el contenido interno (sin los corchetes externos).
+    std::string content = extractContent(rawResponse);
+
+    // Módulo 3: Dividir el contenido en las dos partes de CSV.
+    auto parts = splitCSVContent(content);
+
+    // Procesar cada parte para unir las filas en un único string (separadas por saltos de línea)
+    std::string leftCsv = processPart(parts.first);
+    std::string rightCsv = processPart(parts.second);
+
+    // Convertir cada CSV a vector<vector<int>>
+    pressures_left = parseCSV(leftCsv);
+    pressures_right = parseCSV(rightCsv);
+}
+//------------------------------------------------------------
+// 16) Encapsulación de la solicitud de csv y generación de la animación
+//------------------------------------------------------------
+
+// void fetchCSVAndGenerateAnimation()
+// {
+//     // 1) Cargar coords (JSON)
+//     vector<pair<double, double>> coords_left, coords_right;
+//     std::vector<std::vector<int>> pressures_left, pressures_right;
+//     std::string baseUrl = "http://localhost:3000/"; // http://ssith-backend-container:3000
+//     fetchCSV(baseUrl, "1", "1", "1", "30", {"1", "2"}, pressures_left, pressures_right);
+//     generate_combined_animation_JET(
+//         pressures_left,
+//         pressures_right,
+//         coords_left,
+//         coords_right,
+//         "S1_http.mp4",
+//         wFinal, hFinal,
+//         gridW, gridH,
+//         radius, smoothness,
+//         fps,
+//         numThreads,
+//         legendWidth);
+// }
 //------------------------------------------------------------
 // 8) MAIN de ejemplo
 //------------------------------------------------------------
@@ -605,7 +747,7 @@ int main()
     int gridH = 69;
     double radius = 70.0;
     double smoothness = 2.0;
-    double fps = 50.0;
+    double fps = 32.0;
     int numThreads = 4;
 
     // Ancho total de la leyenda (p.ej. 80 px para la banda + texto)
@@ -613,33 +755,40 @@ int main()
 
     // 1) Cargar coords (JSON)
     vector<pair<double, double>> coords_left, coords_right;
+    std::vector<std::vector<int>> pressures_left, pressures_right;
+
+    const std::string queue = "redis_queue_prueba";
+
+    std::string baseUrl = "http://localhost:3000/"; // http://ssith-backend-container:3000
+
     read_coordinates("leftPoints.json", coords_left);
     read_coordinates("rightPoints.json", coords_right);
 
     // 2) Cargar CSV
-    vector<vector<double>> pressures_left = read_csv("left.csv");
-    vector<vector<double>> pressures_right = read_csv("right.csv");
+    // vector<vector<double>> pressures_left = read_csv("left.csv");
+    // vector<vector<double>> pressures_right = read_csv("right.csv");
 
-    const std::string queue = "redis_queue_prueba";
+    // Llamar a la función fetchCSV
+    fetchCSV(baseUrl, "1", "1", "1", "30", {"1", "2"}, pressures_left, pressures_right);
 
-    consumeFromQueue(queue);
+    // consumeFromQueue(queue);
 
     // 3) Generar animación
 
     // LO COMENTO PARA PROBAR LA PARTE DE REDIS
 
-    // generate_combined_animation_JET(
-    //     pressures_left,
-    //     pressures_right,
-    //     coords_left,
-    //     coords_right,
-    //     "S1.mp4",
-    //     wFinal, hFinal,
-    //     gridW, gridH,
-    //     radius, smoothness,
-    //     fps,
-    //     numThreads,
-    //     legendWidth);
+    generate_combined_animation_JET(
+        pressures_left,
+        pressures_right,
+        coords_left,
+        coords_right,
+        "S1_http.mp4",
+        wFinal, hFinal,
+        gridW, gridH,
+        radius, smoothness,
+        fps,
+        numThreads,
+        legendWidth);
 
     return 0;
 }

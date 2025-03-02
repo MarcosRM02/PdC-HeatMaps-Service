@@ -1,235 +1,132 @@
-// ------------------------------------------------------------------
+#include <iostream>
+#include <vector>
+#include <string>
+#include <sstream>
+#include <fstream>
+#include <curl/curl.h>
 
-// Función para conectarse a Redis y obtener los datos CSV
-
-/*
-Este método, de momento no sirve de mucho, ya que de redis obtendre solo los id popara sacar
-los csv de la peticion http dentro de los endpoints de la api
-*/
-vector<vector<double>> getCSVFromRedis(const string &key, const string &redis_host = "localhost", int redis_port = 6379) //&redis_host = "redis_container",
+std::string WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
 {
-    redisContext *c = redisConnect(redis_host.c_str(), redis_port);
-    if (c == NULL || c->err)
+    ((std::string *)userp)->append((char *)contents, size * nmemb);
+    return size * nmemb;
+}
+
+std::string buildWearableIdsQuery(const std::vector<std::string> &wearableIds)
+{
+    std::string query;
+    for (const auto &id : wearableIds)
     {
-        if (c)
-        {
-            cerr << "Error: " << c->errstr << endl;
-            redisFree(c);
-        }
-        else
-        {
-            cerr << "Error: No se pudo asignar el contexto Redis" << endl;
-        }
-        exit(1);
+        if (!query.empty())
+            query += "&";
+        query += "wearableIds[]=" + id;
     }
+    return query;
+}
 
-    // Ejecutar comando GET en Redis
-    redisReply *reply = (redisReply *)redisCommand(c, "GET %s", key.c_str());
-    if (reply == NULL || reply->type == REDIS_REPLY_NIL)
+std::vector<std::vector<double>> parseCSV(const std::string &csvData)
+{
+    std::vector<std::vector<double>> data;
+    std::stringstream ss(csvData);
+    std::string line;
+    while (std::getline(ss, line))
     {
-        cerr << "Error: No se encontró la clave " << key << " en Redis." << endl;
-        redisFree(c);
-        return {};
-    }
-
-    // Convertir la respuesta de Redis en una cadena CSV
-    string csv_data(reply->str);
-    freeReplyObject(reply);
-    redisFree(c);
-
-    // Convertir CSV en matriz de datos
-    vector<vector<double>> data;
-    istringstream stream(csv_data);
-    string line;
-
-    while (getline(stream, line))
-    {
-        vector<double> row;
-        istringstream lineStream(line);
-        string value;
-
-        while (getline(lineStream, value, ','))
+        std::vector<double> row;
+        std::stringstream lineStream(line);
+        std::string value;
+        while (std::getline(lineStream, value, ','))
         {
             try
             {
-                row.push_back(stod(value)); // Convertir a double
+                row.push_back(std::stod(value)); // Convertir cada valor a double
             }
-            catch (const invalid_argument &e)
+            catch (...)
             {
-                cerr << "Error en conversión de datos: " << value << endl;
-                row.push_back(0.0);
+                row.push_back(0.0); // Si no puede convertir, agregar 0.0
             }
         }
         data.push_back(row);
     }
-
     return data;
 }
 
-void readFromRedisDBEncapsulation(vector<vector<double>> &pressures_left, vector<vector<double>> &pressures_right)
+std::pair<std::vector<std::vector<double>>, std::vector<std::vector<double>>> fetchCSV(const std::string &baseUrl, const std::string &experimentId,
+                                                                                       const std::string &participantId, const std::string &swId,
+                                                                                       const std::string &trialId, const std::vector<std::string> &wearableIds)
 {
-    pressures_left = getCSVFromRedis("r");
-    pressures_right = getCSVFromRedis("l");
+    CURL *curl;
+    CURLcode res;
+    std::string readBuffer;
+
+    // Construcción de la URL
+    std::string wearableIdsQuery = buildWearableIdsQuery(wearableIds);
+    std::string url = baseUrl + "swData/generateCSV/" + experimentId + "/" + participantId + "/" + swId + "/" + trialId + "?" + wearableIdsQuery;
+
+    curl = curl_easy_init();
+    if (curl)
+    {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+
+        // Ejecutar la solicitud
+        res = curl_easy_perform(curl);
+        if (res != CURLE_OK)
+        {
+            std::cerr << "❌ Error en la petición HTTP: " << curl_easy_strerror(res) << std::endl;
+        }
+
+        curl_easy_cleanup(curl);
+    }
+
+    // Aquí asumimos que la respuesta es un string[][], donde cada subarray es un CSV
+    // Ejemplo:
+    // readBuffer = "[\"col1,col2,col3\n1.1,2.2,3.3\n4.4,5.5,6.6\",\"col1,col2,col3\n7.7,8.8,9.9\n10.10,11.11,12.12\"]"
+
+    // Extraemos ambos CSV: uno en la posición [0] y otro en la posición [1]
+    size_t firstCommaPos = readBuffer.find("\",\"") + 3;                                     // Encuentra la posición del primer separador entre CSVs
+    size_t secondCommaPos = readBuffer.rfind("\",\"");                                       // Encuentra la posición del segundo separador entre CSVs
+    std::string leftCsv = readBuffer.substr(1, firstCommaPos - 3);                           // Substring del primer CSV
+    std::string rightCsv = readBuffer.substr(firstCommaPos, secondCommaPos - firstCommaPos); // Substring del segundo CSV
+
+    // Convertir ambos CSV a vector<vector<double>>
+    std::vector<std::vector<double>> pressures_left = parseCSV(leftCsv);
+    std::vector<std::vector<double>> pressures_right = parseCSV(rightCsv);
+
+    return {pressures_left, pressures_right};
 }
 
-void consumeFromQueue(const std::string &queue)
+int main()
 {
-    redisContext *context = redisConnect("redis_container", 6379);
-    if (context == nullptr || context->err)
+    std::string baseUrl = "http://localhost:3000/";
+    std::string experimentId = "exp123";
+    std::string participantId = "part456";
+    std::string swId = "sw789";
+    std::string trialId = "trial001";
+    std::vector<std::string> wearableIds = {"wearable1", "wearable2"};
+
+    // Llamar a la función fetchCSV
+    auto [pressures_left, pressures_right] = fetchCSV(baseUrl, experimentId, participantId, swId, trialId, wearableIds);
+
+    // Mostrar el resultado
+    std::cout << "Presiones Left:" << std::endl;
+    for (const auto &row : pressures_left)
     {
-        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
-        return;
+        for (const auto &val : row)
+        {
+            std::cout << val << " ";
+        }
+        std::cout << std::endl;
     }
 
-    std::string lastID = "0"; // Comenzar desde el inicio
-
-    while (true)
+    std::cout << "Presiones Right:" << std::endl;
+    for (const auto &row : pressures_right)
     {
-        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
-        // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
-        redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
-
-        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
+        for (const auto &val : row)
         {
-            for (size_t i = 0; i < reply->elements; i++)
-            {
-                redisReply *stream = reply->element[i];
-                if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
-                {
-                    redisReply *streamName = stream->element[0];
-                    redisReply *messages = stream->element[1];
-
-                    for (size_t j = 0; j < messages->elements; j++)
-                    {
-                        redisReply *message = messages->element[j];
-
-                        if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
-                        {
-                            redisReply *msgID = message->element[0];
-                            redisReply *msgData = message->element[1];
-
-                            std::string lado1, datos1, lado2, datos2;
-
-                            if (msgID->type == REDIS_REPLY_STRING)
-                            {
-                                lastID = msgID->str; // Guardamos el último ID leído
-                                std::cout << "📩 Mensaje recibido (" << lastID << "): ";
-
-                                for (size_t k = 0; k < msgData->elements; k += 2)
-                                {
-                                    redisReply *field = msgData->element[k];
-                                    redisReply *value = msgData->element[k + 1];
-
-                                    if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
-                                    {
-                                        if (std::string(field->str) == "id1")
-                                            lado1 = value->str;
-                                        if (std::string(field->str) == "id2")
-                                            datos1 = value->str;
-                                        if (std::string(field->str) == "id3")
-                                            lado2 = value->str;
-                                    }
-                                }
-
-                                // Imprimir el par de valores
-                                std::cout << "[(" << lado1 << ", " << datos1 << "), (" << lado2 << ", " << datos2 << ")]" << std::endl;
-                            }
-                        }
-                    }
-                }
-            }
+            std::cout << val << " ";
         }
-
-        if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
-        {
-            freeReplyObject(reply);
-        }
+        std::cout << std::endl;
     }
 
-    redisFree(context);
-}
-
-void consumeFromQueue(const std::string &queue)
-{
-    redisContext *context = redisConnect("redis_container", 6379);
-    if (context == nullptr || context->err)
-    {
-        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
-        return;
-    }
-
-    std::string lastID = "0"; // Comenzar desde el inicio
-
-    while (true)
-    {
-        cout << "🔍 Buscando mensajes en la cola..." << std::endl;
-        // Espera indefinida hasta recibir un mensaje (Espera Pasiva)
-        redisReply *reply = (redisReply *)redisCommand(context, "XREAD BLOCK 0 STREAMS %s %s", queue.c_str(), lastID.c_str());
-
-        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 0)
-        {
-            for (size_t i = 0; i < reply->elements; i++)
-            {
-                redisReply *stream = reply->element[i];
-                if (stream->type == REDIS_REPLY_ARRAY && stream->elements >= 2)
-                {
-                    redisReply *streamName = stream->element[0];
-                    redisReply *messages = stream->element[1];
-
-                    for (size_t j = 0; j < messages->elements; j++)
-                    {
-                        redisReply *message = messages->element[j];
-
-                        if (message->type == REDIS_REPLY_ARRAY && message->elements >= 2)
-                        {
-                            redisReply *msgID = message->element[0];
-                            redisReply *msgData = message->element[1];
-
-                            int wearableId_L = -1, wearableId_R = -1, experimentId = -1, participantId = -1, sWId = -1, trialId = -1;
-
-                            if (msgID->type == REDIS_REPLY_STRING)
-                            {
-                                lastID = msgID->str; // Guardamos el último ID leído
-                                std::cout << "📩 Mensaje recibido (" << lastID << "): ";
-
-                                for (size_t k = 0; k < msgData->elements; k += 2)
-                                {
-                                    redisReply *field = msgData->element[k];
-                                    redisReply *value = msgData->element[k + 1];
-
-                                    if (field->type == REDIS_REPLY_STRING && value->type == REDIS_REPLY_STRING)
-                                    {
-                                        if (std::string(field->str) == "wearableId_L")
-                                            wearableId_L = std::stoi(value->str);
-                                        else if (std::string(field->str) == "wearableId_R")
-                                            wearableId_R = std::stoi(value->str);
-                                        else if (std::string(field->str) == "experimentId")
-                                            experimentId = std::stoi(value->str);
-                                        else if (std::string(field->str) == "participantId")
-                                            participantId = std::stoi(value->str);
-                                        else if (std::string(field->str) == "sWId")
-                                            sWId = std::stoi(value->str);
-                                        else if (std::string(field->str) == "trialId")
-                                            trialId = std::stoi(value->str);
-                                    }
-                                }
-
-                                // Imprimir el par de valores
-                                std::cout << "wearableId_L: " << wearableId_L << ", wearableId_R: " << wearableId_R
-                                          << ", experimentId: " << experimentId << ", participantId: " << participantId
-                                          << ", sWId: " << sWId << ", trialId: " << trialId << std::endl;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (reply) // Para liberar memoria, pero nunca se va a ejecutar debido al while true
-        {
-            freeReplyObject(reply);
-        }
-    }
-
-    redisFree(context);
+    return 0;
 }
