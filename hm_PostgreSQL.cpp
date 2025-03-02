@@ -49,6 +49,75 @@ const char *dataBase = "ssith-db";
 const char *user = "admin";
 const char *passwd = "admin";
 
+const std::string apiUser = "marcos"; // Más adelante miraremos una alternativa a esto.
+const std::string apiPassword = "zodv38jN0Bty5ns1";
+const std::string loginUrl = "http://localhost:3000/authentication/serviceLogin/"; // http://ssith-backend-container:3000
+
+//------------------------------------------------------------
+// 20) Login del servicio, para poder obtener su token jwt
+//------------------------------------------------------------
+// Callback para almacenar la respuesta del servidor
+size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *output)
+{
+    size_t total_size = size * nmemb;
+    output->append((char *)contents, total_size);
+    return total_size;
+}
+
+std::string loginToAPI()
+{
+    CURL *curl;
+    CURLcode res;
+    string response;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl = curl_easy_init();
+
+    if (curl)
+    {
+
+        string jsonData = "{\"user\":\"" + apiUser + "\",\"password\":\"" + apiPassword + "\"}";
+
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL, loginUrl.c_str());
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonData.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+        res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK)
+        {
+            cerr << "Error en la solicitud: " << curl_easy_strerror(res) << endl;
+        }
+        else
+        {
+            cout << "Respuesta del servidor: " << response << endl;
+        }
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    curl_global_cleanup();
+
+    return response; // Devuelve el token jwt
+}
+
+std::string &getToken()
+{
+    static string token;
+    if (token.empty()) // Solo hace login si el token aún no está definido
+    {
+        token = loginToAPI();
+    }
+    return token;
+}
+
 //------------------------------------------------------------
 // 1) Leer coordenadas (JSON)
 //------------------------------------------------------------
@@ -491,14 +560,6 @@ void readCoordinates(vector<pair<double, double>> &coords_left, vector<pair<doub
 // 14) Generar solicitud http a la API para obtener los csv
 //------------------------------------------------------------
 
-// Callback para almacenar la respuesta del servidor
-size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *output)
-{
-    size_t total_size = size * nmemb;
-    output->append((char *)contents, total_size);
-    return total_size;
-}
-
 // Función para convertir un vector de IDs en la estructura correcta de Query Params
 std::string buildWearableIdsQuery(const std::string &wearableIdL, const std::string &wearableIdR)
 {
@@ -513,14 +574,25 @@ std::string fetchUrlContent(const std::string &url)
     std::string readBuffer;
     if (curl)
     {
+        struct curl_slist *headers = NULL;
+        // Construir la cabecera con el token Bearer
+        // std::cout << "Token generado: " << getToken() << std::endl;
+
+        string authHeader = "Authorization: Bearer " + getToken();
+        headers = curl_slist_append(headers, authHeader.c_str());
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers); // Se añaden los headers
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK)
         {
             std::cerr << "❌ Error en la petición HTTP: " << curl_easy_strerror(res) << std::endl;
         }
+        curl_slist_free_all(headers); // Liberar memoria de los headers
         curl_easy_cleanup(curl);
     }
     return readBuffer;
@@ -633,6 +705,7 @@ void fetchCSV(
     const std::string &participantId, const std::string &swId,
     const std::string &trialId, const std::string &wearableIdL, const std::string &wearableIdR, std::vector<std::vector<int>> &pressures_left, std::vector<std::vector<int>> &pressures_right)
 {
+
     // Construir la URL
     std::string wearableIdsQuery = buildWearableIdsQuery(wearableIdL, wearableIdR);
     std::string url = baseUrl + experimentId + "/" +
@@ -747,7 +820,7 @@ void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_lef
     // 2) Crear la carpeta de salida si no existe
     createDirectoryIfNotExists("./out");
 
-    std::string videoPath = "./out/experimentId_" + experimentId +
+    std::string videoPath = "out/experimentId_" + experimentId +
                             "_participantId_" + participantId +
                             "_trialId_" + trialId +
                             "_sWId_" + swId +
@@ -871,7 +944,6 @@ void consumeFromQueue(const std::string &redisQueue)
 //------------------------------------------------------------
 int main()
 {
-
     consumeFromQueue(redisQueue);
 
     return 0;
