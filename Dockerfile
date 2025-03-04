@@ -49,12 +49,40 @@
 FROM gcc:latest
 
 # Instala dependencias (si es necesario)
+# RUN apt-get update && apt-get install -y \
+#     libopencv-dev \
+#     libeigen3-dev \
+#     ffmpeg \
+#     libhiredis-dev \
+#     && rm -rf /var/lib/apt/lists/*
+
+# RUN apt-get update && apt-get install -y \
+#     libopencv-dev \
+#     libeigen3-dev \
+#     ffmpeg \
+#     libhiredis1.1=1.1.0* libhiredis-dev=1.1.0* \
+#     libpq-dev \
+#     libcurl4-openssl-dev \
+#     && rm -rf /var/lib/apt/lists/*
+
 RUN apt-get update && apt-get install -y \
+    git \
+    make \
+    cmake \
+    pkg-config \
+    ffmpeg \
     libopencv-dev \
     libeigen3-dev \
-    ffmpeg \
-    libhiredis-dev \
+    libpq-dev \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Clonar y compilar hiredis v1.1.0 desde el código fuente
+RUN git clone --branch v1.1.0 https://github.com/redis/hiredis.git /tmp/hiredis \
+    && cd /tmp/hiredis \
+    && make && make install \
+    && ldconfig \
+    && rm -rf /tmp/hiredis
 
 # Establece el directorio de trabajo
 WORKDIR /usr/src/app

@@ -37,13 +37,13 @@ constexpr double smoothness = 2.0;
 constexpr double fps = 32.0;
 constexpr int numThreads = 4;
 constexpr int legendWidth = 80;
-const std::string baseUrl = "http://localhost:3000/swData/generateCSV/"; // http://ssith-backend-container:3000
+const std::string baseUrl = "http://ssith-backend-container:3000/swData/generateCSV/"; // http://ssith-backend-container:3000 -- localhost:3000
 const std::string redisQueue = "redis_queue";
 
 PGconn *cnn = NULL;
 PGresult *result = NULL;
 
-const char *host = "localhost";
+const char *host = "sqlDB";
 const char *port = "5432";
 const char *dataBase = "ssith-db";
 const char *user = "admin";
@@ -51,7 +51,7 @@ const char *passwd = "admin";
 
 const std::string apiUser = "marcos"; // Más adelante miraremos una alternativa a esto.
 const std::string apiPassword = "zodv38jN0Bty5ns1";
-const std::string loginUrl = "http://localhost:3000/authentication/serviceLogin/"; // http://ssith-backend-container:3000
+const std::string loginUrl = "http://ssith-backend-container:3000/authentication/serviceLogin/"; // http://ssith-backend-container:3000
 
 //------------------------------------------------------------
 // 20) Login del servicio, para poder obtener su token jwt
@@ -110,6 +110,8 @@ std::string loginToAPI()
 
 std::string &getToken()
 {
+
+    // TO-DO: Implementar un mecanismo de renovación del token
     static string token;
     if (token.empty()) // Solo hace login si el token aún no está definido
     {
@@ -495,14 +497,47 @@ void generate_combined_animation_JET(
 // 9) Conexion a la BD Redis para obtener los id de las insoles
 //------------------------------------------------------------
 
-redisContext *connectToRedis(const std::string &host, int port)
+// redisContext *connectToRedis(const std::string &host, int port)
+// {
+//     redisContext *context = redisConnect(host.c_str(), port);
+//     if (context == nullptr || context->err)
+//     {
+//         std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+//         return nullptr;
+//     }
+//     return context;
+// }
+
+redisContext *connectToRedis(const std::string &host, int port, const std::string &password)
 {
     redisContext *context = redisConnect(host.c_str(), port);
     if (context == nullptr || context->err)
     {
-        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+        std::cerr << "❌ Error al conectar con Redis: "
+                  << (context ? context->errstr : "Desconocido") << std::endl;
         return nullptr;
     }
+
+    // Si se especificó una contraseña, se envía el comando AUTH
+    if (!password.empty())
+    {
+        redisReply *reply = (redisReply *)redisCommand(context, "AUTH %s", password.c_str());
+        if (reply == nullptr)
+        {
+            std::cerr << "❌ Error al enviar AUTH a Redis." << std::endl;
+            redisFree(context);
+            return nullptr;
+        }
+        if (reply->type == REDIS_REPLY_ERROR)
+        {
+            std::cerr << "❌ Error en la autenticación: " << reply->str << std::endl;
+            freeReplyObject(reply);
+            redisFree(context);
+            return nullptr;
+        }
+        freeReplyObject(reply);
+    }
+
     return context;
 }
 
@@ -807,25 +842,28 @@ void createDirectoryIfNotExists(const string &path)
     }
 }
 
-//------------------------------------------------------------
-// 16) Encapsulación de la solicitud de csv y generación de la animación
-//------------------------------------------------------------
-
-void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_left, const vector<pair<double, double>> &coords_right, const string &wearableId_L, const string &wearableId_R, const string &experimentId,
-                                  const string &participantId, const string &swId, const string &trialId)
+void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_left,
+                                  const vector<pair<double, double>> &coords_right,
+                                  const string &wearableId_L,
+                                  const string &wearableId_R,
+                                  const string &experimentId,
+                                  const string &participantId,
+                                  const string &swId,
+                                  const string &trialId)
 {
     // 1) Cargar coords (JSON)
     std::vector<std::vector<int>> pressures_left, pressures_right;
 
-    // 2) Crear la carpeta de salida si no existe
-    createDirectoryIfNotExists("./out");
+    // 2) Crear la carpeta de salida dentro del volumen, si no existe
+    createDirectoryIfNotExists("/app/backend/videos/hm_videos");
 
-    std::string videoPath = "out/experimentId_" + experimentId +
+    // Construir la ruta absoluta para el video dentro del volumen compartido
+    std::string videoPath = "/app/backend/videos/hm_videos/experimentId_" + experimentId +
                             "_participantId_" + participantId +
                             "_trialId_" + trialId +
                             "_sWId_" + swId +
-                            "_wearableL" + wearableId_L +
-                            "_wearableR" + wearableId_R + ".mp4";
+                            "_wearableL_" + wearableId_L +
+                            "_wearableR_" + wearableId_R + ".mp4";
 
     fetchCSV(baseUrl, experimentId, participantId, swId, trialId, wearableId_L, wearableId_R, pressures_left, pressures_right);
     generate_combined_animation_JET(
@@ -837,7 +875,6 @@ void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_lef
 
     updateTrial(videoPath, trialId);
 }
-
 //------------------------------------------------------------
 // 119) Eliminar los datos de la cola que ya han sido procesados
 //------------------------------------------------------------
@@ -902,7 +939,8 @@ void consumeFromQueue(const std::string &redisQueue)
 {
     vector<pair<double, double>> coords_left, coords_right;
     readCoordinates(coords_left, coords_right);
-    redisContext *context = connectToRedis("localhost", 6379); // cambiar loclahost a redis-contaner cuando meta esto en docker
+    // redisContext *context = connectToRedis("redis_container", 6379);
+    redisContext *context = connectToRedis("redis_container", 6379, "mi_contraseña_secreta");
     if (context == nullptr)
         return;
 
