@@ -18,6 +18,11 @@
 
 #include <curl/curl.h>
 
+#include <libpq-fe.h> // Incluir libpq-fe para PostgreSQL
+
+#include <sys/stat.h>
+#define MKDIR(path) mkdir(path, 0777) // Comando mkdir en Linux/macOS
+
 using namespace std;
 using namespace cv;
 using namespace rapidjson;
@@ -32,8 +37,88 @@ constexpr double smoothness = 2.0;
 constexpr double fps = 32.0;
 constexpr int numThreads = 4;
 constexpr int legendWidth = 80;
-const std::string baseUrl = "http://localhost:3000/swData/generateCSV/"; // http://ssith-backend-container:3000
+const std::string baseUrl = "http://ssith-backend-container:3000/swData/generateCSV/"; // http://ssith-backend-container:3000 -- localhost:3000
 const std::string redisQueue = "redis_queue";
+
+PGconn *cnn = NULL;
+PGresult *result = NULL;
+
+const char *host = "sqlDB";
+const char *port = "5432";
+const char *dataBase = "ssith-db";
+const char *user = "admin";
+const char *passwd = "admin";
+
+const std::string apiUser = "marcos"; // Más adelante miraremos una alternativa a esto.
+const std::string apiPassword = "zodv38jN0Bty5ns1";
+const std::string loginUrl = "http://ssith-backend-container:3000/authentication/serviceLogin/"; // http://ssith-backend-container:3000
+
+//------------------------------------------------------------
+// 20) Login del servicio, para poder obtener su token jwt
+//------------------------------------------------------------
+// Callback para almacenar la respuesta del servidor
+size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *output)
+{
+    size_t total_size = size * nmemb;
+    output->append((char *)contents, total_size);
+    return total_size;
+}
+
+std::string loginToAPI()
+{
+    CURL *curl;
+    CURLcode res;
+    string response;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl = curl_easy_init();
+
+    if (curl)
+    {
+
+        string jsonData = "{\"user\":\"" + apiUser + "\",\"password\":\"" + apiPassword + "\"}";
+
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL, loginUrl.c_str());
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonData.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+        res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK)
+        {
+            cerr << "Error en la solicitud: " << curl_easy_strerror(res) << endl;
+        }
+        else
+        {
+            cout << "Respuesta del servidor: " << response << endl;
+        }
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    curl_global_cleanup();
+
+    return response; // Devuelve el token jwt
+}
+
+std::string &getToken()
+{
+
+    // TO-DO: Implementar un mecanismo de renovación del token
+    static string token;
+    if (token.empty()) // Solo hace login si el token aún no está definido
+    {
+        token = loginToAPI();
+    }
+    return token;
+}
 
 //------------------------------------------------------------
 // 1) Leer coordenadas (JSON)
@@ -331,18 +416,12 @@ void generate_combined_animation_JET(
     const vector<vector<int>> &pressures_right,
     const vector<pair<double, double>> &coords_left,
     const vector<pair<double, double>> &coords_right,
-    const string &outFilename,
-    int wFinal, int hFinal,
-    int gridW, int gridH,
-    double radius, double smooth,
-    double fps,
-    int numThreads,
-    int legendTotalWidth // Ancho total de la barra de color
-)
+    const string &outFilename)
+
 {
     // 1) Calcular dimensiones del frame completo con fondo blanco
     int margin = 50; // Margen extra para separar elementos
-    int finalWidth = (wFinal * 2) + legendTotalWidth + (margin * 3);
+    int finalWidth = (wFinal * 2) + legendWidth + (margin * 3);
     int finalHeight = hFinal + (margin * 2);
 
     // 2) Crear la barra de colores
@@ -351,7 +430,7 @@ void generate_combined_animation_JET(
     Mat colorBar = create_jet_colorbar(barWidth, barHeight);
 
     // Contenedor con fondo blanco para la barra de colores
-    Mat legendContainer(barHeight, legendTotalWidth, CV_8UC3, Scalar(255, 255, 255));
+    Mat legendContainer(barHeight, legendWidth, CV_8UC3, Scalar(255, 255, 255));
     Rect roiBar(10, 0, barWidth, barHeight);
     colorBar.copyTo(legendContainer(roiBar));
 
@@ -376,8 +455,8 @@ void generate_combined_animation_JET(
     // 4) Generar cada frame dentro de un "div" visual en OpenCV
     for (size_t f = 0; f < pressures_left.size(); f++)
     {
-        Mat leftF = generate_heatmap_jet(coords_left, pressures_left[f], wFinal, hFinal, gridW, gridH, radius, smooth);
-        Mat rightF = generate_heatmap_jet(coords_right, pressures_right[f], wFinal, hFinal, gridW, gridH, radius, smooth);
+        Mat leftF = generate_heatmap_jet(coords_left, pressures_left[f], wFinal, hFinal, gridW, gridH, radius, smoothness);
+        Mat rightF = generate_heatmap_jet(coords_right, pressures_right[f], wFinal, hFinal, gridW, gridH, radius, smoothness);
 
         draw_points_indices(leftF, coords_left);
         draw_points_indices(rightF, coords_right);
@@ -402,7 +481,7 @@ void generate_combined_animation_JET(
         // Copiar cada parte en su posición
         leftF.copyTo(finalFrame(Rect(leftX, topY, wFinal, hFinal)));
         rightF.copyTo(finalFrame(Rect(rightX, topY, wFinal, hFinal)));
-        legendContainer.copyTo(finalFrame(Rect(legendX - 22, topY + 19, legendTotalWidth, barHeight)));
+        legendContainer.copyTo(finalFrame(Rect(legendX - 22, topY + 19, legendWidth, barHeight)));
 
         // Escribir a FFmpeg
         size_t bytesToWrite = finalFrame.total() * finalFrame.elemSize();
@@ -418,14 +497,47 @@ void generate_combined_animation_JET(
 // 9) Conexion a la BD Redis para obtener los id de las insoles
 //------------------------------------------------------------
 
-redisContext *connectToRedis(const std::string &host, int port)
+// redisContext *connectToRedis(const std::string &host, int port)
+// {
+//     redisContext *context = redisConnect(host.c_str(), port);
+//     if (context == nullptr || context->err)
+//     {
+//         std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+//         return nullptr;
+//     }
+//     return context;
+// }
+
+redisContext *connectToRedis(const std::string &host, int port, const std::string &password)
 {
     redisContext *context = redisConnect(host.c_str(), port);
     if (context == nullptr || context->err)
     {
-        std::cerr << "❌ Error al conectar con Redis: " << (context ? context->errstr : "Desconocido") << std::endl;
+        std::cerr << "❌ Error al conectar con Redis: "
+                  << (context ? context->errstr : "Desconocido") << std::endl;
         return nullptr;
     }
+
+    // Si se especificó una contraseña, se envía el comando AUTH
+    if (!password.empty())
+    {
+        redisReply *reply = (redisReply *)redisCommand(context, "AUTH %s", password.c_str());
+        if (reply == nullptr)
+        {
+            std::cerr << "❌ Error al enviar AUTH a Redis." << std::endl;
+            redisFree(context);
+            return nullptr;
+        }
+        if (reply->type == REDIS_REPLY_ERROR)
+        {
+            std::cerr << "❌ Error en la autenticación: " << reply->str << std::endl;
+            freeReplyObject(reply);
+            redisFree(context);
+            return nullptr;
+        }
+        freeReplyObject(reply);
+    }
+
     return context;
 }
 
@@ -475,21 +587,13 @@ void readCoordinates(vector<pair<double, double>> &coords_left, vector<pair<doub
 {
     // 1) Cargar coords (JSON)
 
-    read_coordinates("leftPoints.json", coords_left);
-    read_coordinates("rightPoints.json", coords_right);
+    read_coordinates("./in/leftPoints.json", coords_left);
+    read_coordinates("./in/rightPoints.json", coords_right);
 }
 
 //------------------------------------------------------------
 // 14) Generar solicitud http a la API para obtener los csv
 //------------------------------------------------------------
-
-// Callback para almacenar la respuesta del servidor
-size_t WriteCallback(void *contents, size_t size, size_t nmemb, std::string *output)
-{
-    size_t total_size = size * nmemb;
-    output->append((char *)contents, total_size);
-    return total_size;
-}
 
 // Función para convertir un vector de IDs en la estructura correcta de Query Params
 std::string buildWearableIdsQuery(const std::string &wearableIdL, const std::string &wearableIdR)
@@ -505,14 +609,25 @@ std::string fetchUrlContent(const std::string &url)
     std::string readBuffer;
     if (curl)
     {
+        struct curl_slist *headers = NULL;
+        // Construir la cabecera con el token Bearer
+        // std::cout << "Token generado: " << getToken() << std::endl;
+
+        string authHeader = "Authorization: Bearer " + getToken();
+        headers = curl_slist_append(headers, authHeader.c_str());
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers); // Se añaden los headers
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK)
         {
             std::cerr << "❌ Error en la petición HTTP: " << curl_easy_strerror(res) << std::endl;
         }
+        curl_slist_free_all(headers); // Liberar memoria de los headers
         curl_easy_cleanup(curl);
     }
     return readBuffer;
@@ -625,18 +740,19 @@ void fetchCSV(
     const std::string &participantId, const std::string &swId,
     const std::string &trialId, const std::string &wearableIdL, const std::string &wearableIdR, std::vector<std::vector<int>> &pressures_left, std::vector<std::vector<int>> &pressures_right)
 {
+
     // Construir la URL
     std::string wearableIdsQuery = buildWearableIdsQuery(wearableIdL, wearableIdR);
     std::string url = baseUrl + experimentId + "/" +
                       participantId + "/" + swId + "/" + trialId + "?" + wearableIdsQuery;
 
-    // Módulo 1: Obtener la respuesta HTTP.
+    // Obtener la respuesta HTTP.
     std::string rawResponse = fetchUrlContent(url);
 
-    // Módulo 2: Extraer el contenido interno (sin los corchetes externos).
+    //  Extraer el contenido interno (sin los corchetes externos).
     std::string content = extractContent(rawResponse);
 
-    // Módulo 3: Dividir el contenido en las dos partes de CSV.
+    // Dividir el contenido en las dos partes de CSV.
     auto parts = splitCSVContent(content);
 
     // Procesar cada parte para unir las filas en un único string (separadas por saltos de línea)
@@ -647,15 +763,107 @@ void fetchCSV(
     pressures_left = parseCSV(leftCsv);
     pressures_right = parseCSV(rightCsv);
 }
+
 //------------------------------------------------------------
-// 16) Encapsulación de la solicitud de csv y generación de la animación
+// 12) Conexión con PostgreSQL e insercion de la url de la animación generada
 //------------------------------------------------------------
 
-void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_left, const vector<pair<double, double>> &coords_right, const string &wearableId_L, const string &wearableId_R, const string &experimentId,
-                                  const string &participantId, const string &swId, const string &trialId)
+void createConnection()
+{
+    // Conectarse a PostgreSQL
+    cnn = PQsetdbLogin(host, port, NULL, NULL, dataBase, user, passwd);
+
+    if (cnn == NULL || PQstatus(cnn) == CONNECTION_BAD)
+    {
+        cerr << "Error de conexión a PostgreSQL: " << (cnn ? PQerrorMessage(cnn) : "No se pudo establecer la conexión") << endl;
+        PQfinish(cnn);
+        return; // Sale de la funcion si hay error
+    }
+
+    cout << "Conectado a PostgreSQL!" << endl;
+}
+
+void updateTrial(const string &url, const string &trialId)
+{
+    createConnection();
+    // Consulta SQL con parámetros ($1 y $2), no hago concatenación con variables para
+    // evitar SQLInyections
+    const char *updateQuery = "UPDATE trial SET \"heatMapVideoPath\"=$1 WHERE id=$2;";
+
+    // Definir los valores de los parámetros
+    const char *paramValues[2] = {url.c_str(), trialId.c_str()};
+
+    // Ejecutar la consulta con parámetros
+    result = PQexecParams(cnn, updateQuery, 2, NULL, paramValues, NULL, NULL, 0);
+
+    // Verificar si la consulta se ejecutó correctamente
+    if (!result || PQresultStatus(result) != PGRES_COMMAND_OK)
+    {
+        cerr << "Error al actualizar datos: " << PQerrorMessage(cnn) << endl;
+        if (result)
+            PQclear(result);
+        PQfinish(cnn); // Cerrar la conexión
+        return;
+    }
+
+    cout << "Datos actualizados correctamente." << endl;
+
+    // Liberar memoria y cerrar conexión
+    PQclear(result);
+    PQfinish(cnn);
+}
+
+// Definir MKDIR por si la carpeta de salida de video no existe
+void createDirectoryIfNotExists(const string &path)
+{
+    struct stat info;
+
+    if (stat(path.c_str(), &info) == 0) // Si la ruta existe
+    {
+        if (info.st_mode & S_IFDIR)
+        {
+            cout << "La carpeta ya existe: " << path << endl;
+        }
+        else
+        {
+            cerr << "Existe un archivo con el mismo nombre: " << path << endl;
+        }
+        return;
+    }
+
+    // Si no existe, intentamos crearla
+    if (MKDIR(path.c_str()) == 0)
+    {
+        cout << "Carpeta creada: " << path << endl;
+    }
+    else
+    {
+        cerr << "Error al crear la carpeta: " << path << endl;
+    }
+}
+
+void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_left,
+                                  const vector<pair<double, double>> &coords_right,
+                                  const string &wearableId_L,
+                                  const string &wearableId_R,
+                                  const string &experimentId,
+                                  const string &participantId,
+                                  const string &swId,
+                                  const string &trialId)
 {
     // 1) Cargar coords (JSON)
     std::vector<std::vector<int>> pressures_left, pressures_right;
+
+    // 2) Crear la carpeta de salida dentro del volumen, si no existe
+    createDirectoryIfNotExists("/app/backend/videos/hm_videos");
+
+    // Construir la ruta absoluta para el video dentro del volumen compartido
+    std::string videoPath = "/app/backend/videos/hm_videos/experimentId_" + experimentId +
+                            "_participantId_" + participantId +
+                            "_trialId_" + trialId +
+                            "_sWId_" + swId +
+                            "_wearableL_" + wearableId_L +
+                            "_wearableR_" + wearableId_R + ".mp4";
 
     fetchCSV(baseUrl, experimentId, participantId, swId, trialId, wearableId_L, wearableId_R, pressures_left, pressures_right);
     generate_combined_animation_JET(
@@ -663,17 +871,10 @@ void fetchCSVAndGenerateAnimation(const vector<pair<double, double>> &coords_lef
         pressures_right,
         coords_left,
         coords_right,
-        "S1_http.mp4",
-        wFinal, hFinal,
-        gridW, gridH,
-        radius, smoothness,
-        fps,
-        numThreads,
-        legendWidth);
+        videoPath);
 
-    // Escribir en la postgress, la direccion del video generado
+    updateTrial(videoPath, trialId);
 }
-
 //------------------------------------------------------------
 // 119) Eliminar los datos de la cola que ya han sido procesados
 //------------------------------------------------------------
@@ -738,7 +939,8 @@ void consumeFromQueue(const std::string &redisQueue)
 {
     vector<pair<double, double>> coords_left, coords_right;
     readCoordinates(coords_left, coords_right);
-    redisContext *context = connectToRedis("localhost", 6379); // cambiar loclahost a redis-contaner cuando meta esto en docker
+    // redisContext *context = connectToRedis("redis_container", 6379);
+    redisContext *context = connectToRedis("redis_container", 6379, "mi_contraseña_secreta");
     if (context == nullptr)
         return;
 

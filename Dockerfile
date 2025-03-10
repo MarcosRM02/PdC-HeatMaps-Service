@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clona y compila Hiredis v1.1.0
 RUN git clone --branch v1.1.0 https://github.com/redis/hiredis.git /tmp/hiredis \
     && cd /tmp/hiredis \
     && make && make install \
