@@ -983,6 +983,7 @@ void consumeFromQueue(const std::string &redisQueue)
 int main()
 {
 
+    cout << "🚀 Iniciando el proceso de generación de animaciones..." << endl;
     consumeFromQueue(redisQueue);
 
     return 0;
