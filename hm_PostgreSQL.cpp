@@ -982,6 +982,7 @@ void consumeFromQueue(const std::string &redisQueue)
 //------------------------------------------------------------
 int main()
 {
+
     consumeFromQueue(redisQueue);
 
     return 0;
