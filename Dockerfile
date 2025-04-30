@@ -1,22 +1,32 @@
-# Usa una imagen base con compilador de C++
 FROM gcc:latest
 
-# Instala las dependencias necesarias
+# Instala dependencias necesarias
 RUN apt-get update && apt-get install -y \
+    git \
+    make \
+    cmake \
+    pkg-config \
+    ffmpeg \
     libopencv-dev \
     libeigen3-dev \
-    ffmpeg \
+    libpq-dev \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --branch v1.1.0 https://github.com/redis/hiredis.git /tmp/hiredis \
+    && cd /tmp/hiredis \
+    && make && make install \
+    && ldconfig \
+    && rm -rf /tmp/hiredis
 
 # Establece el directorio de trabajo
 WORKDIR /usr/src/app
 
-# Copia el código fuente y las carpetas necesarias al contenedor
-COPY . .
+# Copia el código fuente y el archivo run.sh
+COPY . .  
 
-# Copia el script de ejecución y le da permisos de ejecución
-COPY run.sh .
+# Da permisos de ejecución al script de inicio
 RUN chmod +x run.sh
 
-# Comando por defecto
-CMD ["./run.sh"]
+# Usa el script de ejecución como punto de entrada
+CMD ["bash", "run.sh"]

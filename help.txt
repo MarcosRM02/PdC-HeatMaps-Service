@@ -31,3 +31,18 @@ Para meter lkos datos en la redis desde un .csv
 cat left.csv | redis-cli -h localhost -x SET l
 cat right.csv | redis-cli -h localhost -x SET r
 
+redis-cli
+XADD redis_queue * id1 "123" id2 "456" id3 "789" 
+
+XADD redis_queue_prueba * experimentId "123" participantId "456" sWId "789" trialId "23" wearableId_L "1" wearableId_R "5"
+
+
+g++ -std=c++17 -I./include -I/usr/include/eigen3 -I/usr/include/opencv4 -I/usr/include/hiredis \
+    -o ./bin/hm_http hm_http.cpp \
+    -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio -lhiredis -lcurl
+
+
+XADD redis_queue * experimentId "1" participantId "1" sWId "1" trialId "30" wearableId_L "1" wearableId_R "2"
+g++ -std=c++17 -I./include -I/usr/include/eigen3 -I/usr/include/opencv4 -I/usr/include/hiredis \
+    -o ./bin/hm_PostgreSql hm_PostgreSQL.cpp \
+    -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio -lhiredis -lcurl -I/usr/include/postgresql -L/usr/lib -lpq
