@@ -6,6 +6,14 @@ until timeout 5 bash -c "echo > /dev/tcp/redis_container/6379"; do
   sleep 5
 done
 
+# 2) Espera al backend
+echo "Esperando a ssith-backend en el puerto 3000..."
+until timeout 5 bash -c "echo > /dev/tcp/ssith-backend/3000"; do
+  echo "  Backend no listo, reintentando..."
+  sleep 5
+done
+echo "Backend activo."
+
 echo "Redis está activo. Compilando y ejecutando el programa..."
 
 # Compila el código en cada inicio del contenedor

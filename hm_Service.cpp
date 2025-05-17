@@ -22,6 +22,8 @@ using namespace std;
 using namespace cv;
 using namespace rapidjson;
 
+const std::string apiHost = "http://ssith-backend-container:3000";
+
 // Parámetros de vídeo y malla
 constexpr int wFinal = 175;
 constexpr int hFinal = 520;
@@ -33,7 +35,7 @@ constexpr double fps = 32.0;
 constexpr int trailLength = 10;
 constexpr int margin = 50;
 constexpr int legendWidth = 80;
-const string baseUrl = "http://ssith-backend-container:3000/swData/generateCSV/";
+const string baseUrl = apiHost + "/swData/generateCSV/";
 const string redisQueue = "redis_queue";
 
 // PostgreSQL
@@ -48,7 +50,12 @@ const char *dbPass = "admin";
 // API login (JWT)
 const string apiUser = "marcos";
 const string apiPassword = "zodv38jN0Bty5ns1";
-const string loginUrl = "http://ssith-backend-container:3000/authentication/serviceLogin/";
+const string loginUrl = apiHost + "/authentication/serviceLogin/";
+
+// CSRF token
+static std::string g_csrfToken;
+const std::string csrfUrl = apiHost + "/authentication/csrf-token";
+const std::string trialsBaseUrl = apiHost + "/trials/edit/";
 
 // cURL write callback
 size_t WriteCallback(void *contents, size_t size, size_t nmemb, string *output)
@@ -61,26 +68,54 @@ size_t WriteCallback(void *contents, size_t size, size_t nmemb, string *output)
 // Realizar login y obtener token JWT
 string loginToAPI()
 {
+    // Borra el cookies.txt anterior (si existía)
+    std::remove("cookies.txt");
     CURL *curl = curl_easy_init();
     string response;
     if (!curl)
         return response;
+
+    // Enable cookie engine: store any Set-Cookie in memory…
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "");
+    // …and also write cookies out to disk (optional)
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "cookies.txt");
+
     string jsonData = "{\"user\":\"" + apiUser + "\",\"password\":\"" + apiPassword + "\"}";
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+
     curl_easy_setopt(curl, CURLOPT_URL, loginUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonData.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    // 3) Perform
     CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK)
-    {
-        cerr << "Error cURL login: " << curl_easy_strerror(res) << endl;
-    }
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    // 4) Cleanup
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
+
+    // 5) Error handling
+    if (res != CURLE_OK)
+    {
+        std::cerr << "Error cURL login: " << curl_easy_strerror(res) << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+    // aquí permitimos 200 **o** 201
+    if (httpCode != 200 && httpCode != 201)
+    {
+        std::cerr
+            << "Login fallido: HTTP " << httpCode
+            << ", body=" << response << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+
+    // 6) Éxito
     return response;
 }
 
@@ -134,21 +169,35 @@ string fetchUrlContent(const string &url)
     string readBuffer;
     if (!curl)
         return readBuffer;
+
+    // 1) Enable cookie handling: send any stored cookies (including jwt)
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "cookies.txt");
+    // (Optional) keep cookies updated on disk
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "cookies.txt");
+
+    // 2) Standard headers
     struct curl_slist *headers = nullptr;
-    string auth = "Authorization: Bearer " + getToken();
-    headers = curl_slist_append(headers, auth.c_str());
     headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    // 3) Set request URL and headers
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // 4) Capture response body
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+
+    // 5) Perform request
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK)
     {
         cerr << "Error cURL GET: " << curl_easy_strerror(res) << endl;
     }
+
+    // 6) Cleanup
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
+
     return readBuffer;
 }
 
@@ -349,23 +398,114 @@ void createConnection()
     }
 }
 
-void updateTrial(const string &url, const string &trialId)
+// void updateTrial(const string &url, const string &trialId)
+// {
+//     if (!cnn)
+//         createConnection();
+//     if (!cnn)
+//         return;
+//     const char *q = "UPDATE trial SET \"heatMapVideoPath\"=$1 WHERE id=$2;";
+//     const char *params[2] = {url.c_str(), trialId.c_str()};
+//     result = PQexecParams(cnn, q, 2, nullptr, params, nullptr, nullptr, 0);
+//     if (!result || PQresultStatus(result) != PGRES_COMMAND_OK)
+//     {
+//         cerr << "Postgres update error: " << PQerrorMessage(cnn) << endl;
+//     }
+//     if (result)
+//         PQclear(result);
+//     PQfinish(cnn);
+//     cnn = nullptr;
+// }
+
+void fetchCsrfToken()
 {
-    if (!cnn)
-        createConnection();
-    if (!cnn)
-        return;
-    const char *q = "UPDATE trial SET \"heatMapVideoPath\"=$1 WHERE id=$2;";
-    const char *params[2] = {url.c_str(), trialId.c_str()};
-    result = PQexecParams(cnn, q, 2, nullptr, params, nullptr, nullptr, 0);
-    if (!result || PQresultStatus(result) != PGRES_COMMAND_OK)
+    if (!g_csrfToken.empty())
+        return; // ya lo tenemos
+
+    std::string response;
+    CURL *curl = curl_easy_init();
+    if (!curl)
     {
-        cerr << "Postgres update error: " << PQerrorMessage(cnn) << endl;
+        std::cerr << "CURL init failed (CSRF)\n";
+        std::exit(EXIT_FAILURE);
     }
-    if (result)
-        PQclear(result);
-    PQfinish(cnn);
-    cnn = nullptr;
+
+    curl_easy_setopt(curl, CURLOPT_URL, csrfUrl.c_str());
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "cookies.txt");
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "cookies.txt");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    CURLcode res = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK || httpCode != 200)
+    {
+        std::cerr << "Failed to fetch CSRF token: HTTP "
+                  << httpCode << ", body=" << response << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+
+    // parse JSON { "csrfToken":"XYZ" }
+    Document doc;
+    doc.Parse(response.c_str());
+    if (!doc.IsObject() || !doc.HasMember("csrfToken") || !doc["csrfToken"].IsString())
+    {
+        std::cerr << "Invalid CSRF response: " << response << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+    g_csrfToken = doc["csrfToken"].GetString();
+}
+
+void updateTrial(const std::string &videoPath, const std::string &trialId)
+{
+    // 1) Si aún no tenemos token CSRF, lo traemos
+    fetchCsrfToken();
+
+    // 2) Preparamos el PUT
+    std::string url = trialsBaseUrl + trialId;
+    std::string bodyJson = "{\"heatMapVideoPath\":\"" + videoPath + "\"}";
+
+    CURL *curl = curl_easy_init();
+    if (!curl)
+        return;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    std::string csrfHeader = "X-CSRF-Token: " + g_csrfToken;
+    headers = curl_slist_append(headers, csrfHeader.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, bodyJson.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "cookies.txt");
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "cookies.txt");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+
+    std::string response;
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    CURLcode res = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK || httpCode < 200 || httpCode >= 300)
+    {
+        std::cerr << "PUT /trials/" << trialId
+                  << " failed: HTTP " << httpCode
+                  << ", body=" << response << "\n";
+    }
+    else
+    {
+        std::cout << "updateTrial OK: " << response << "\n";
+    }
 }
 
 //------------------------------------------------------------
@@ -681,6 +821,8 @@ void consumeFromQueue()
 //------------------------------------------------------------
 int main()
 {
+    cout << "Logging in to service..." << endl;
+    loginToAPI();
     cout << "Iniciando generación de animaciones..." << endl;
     consumeFromQueue();
     return 0;
