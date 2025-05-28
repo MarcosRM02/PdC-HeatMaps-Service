@@ -53,9 +53,10 @@ const string apiPassword = "zodv38jN0Bty5ns1";
 const string loginUrl = apiHost + "/authentication/serviceLogin/";
 
 // CSRF token
-static std::string g_csrfToken;
-const std::string csrfUrl = apiHost + "/authentication/csrf-token";
-const std::string trialsBaseUrl = apiHost + "/trials/edit/";
+static string g_csrfToken;
+const string csrfUrl = apiHost + "/authentication/csrf-token";
+const string trialsBaseUrl = apiHost + "/trials/edit/";
+const string rVideoPathBaseUrl = apiHost + "/trials/getRVideoPath/";
 
 // cURL write callback
 size_t WriteCallback(void *contents, size_t size, size_t nmemb, string *output)
@@ -398,25 +399,6 @@ void createConnection()
     }
 }
 
-// void updateTrial(const string &url, const string &trialId)
-// {
-//     if (!cnn)
-//         createConnection();
-//     if (!cnn)
-//         return;
-//     const char *q = "UPDATE trial SET \"heatMapVideoPath\"=$1 WHERE id=$2;";
-//     const char *params[2] = {url.c_str(), trialId.c_str()};
-//     result = PQexecParams(cnn, q, 2, nullptr, params, nullptr, nullptr, 0);
-//     if (!result || PQresultStatus(result) != PGRES_COMMAND_OK)
-//     {
-//         cerr << "Postgres update error: " << PQerrorMessage(cnn) << endl;
-//     }
-//     if (result)
-//         PQclear(result);
-//     PQfinish(cnn);
-//     cnn = nullptr;
-// }
-
 void fetchCsrfToken()
 {
     if (!g_csrfToken.empty())
@@ -461,10 +443,6 @@ void fetchCsrfToken()
 
 void updateTrial(const std::string &videoPath, const std::string &trialId)
 {
-    // 1) Si aún no tenemos token CSRF, lo traemos
-    fetchCsrfToken();
-
-    // 2) Preparamos el PUT
     std::string url = trialsBaseUrl + trialId;
     std::string bodyJson = "{\"heatMapVideoPath\":\"" + videoPath + "\"}";
 
@@ -748,6 +726,120 @@ void generate_animation(const vector<vector<int>> &pl,
     cout << "Animación generada: " << outFile << endl;
 }
 
+// ---------------------------------------------------
+
+// Obtener duración de un video con ffprobe
+double getVideoDuration(const string &videoPath)
+{
+    string cmd = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"" + videoPath + "\"";
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe)
+    {
+        cerr << "Error al ejecutar ffprobe" << endl;
+        return -1.0;
+    }
+
+    char buffer[128];
+    string result = "";
+    while (!feof(pipe))
+    {
+        if (fgets(buffer, 128, pipe) != NULL)
+            result += buffer;
+    }
+    pclose(pipe);
+
+    try
+    {
+        result.erase(remove_if(result.begin(), result.end(), ::isspace), result.end());
+        return stod(result);
+    }
+    catch (const std::exception &e)
+    {
+        cerr << "Error al convertir duración del video: " << e.what() << endl;
+        return -1.0;
+    }
+}
+
+// Recortar un video a una duración específica
+bool trimVideo(const string &inputPath, const string &outputPath, double duration)
+{
+    string cmd = "ffmpeg -y -i \"" + inputPath + "\" -t " + to_string(duration) + " -c copy \"" + outputPath + "\"";
+    cout << "Ejecutando: " << cmd << endl;
+    int result = system(cmd.c_str());
+    return result == 0;
+}
+
+// Obtener la ruta del video original grabado
+string getOriginalVideoPath(const string &trialId)
+{
+    // Aquí deberías obtener la ruta del video original a través de la API o DB
+    string url = rVideoPathBaseUrl + trialId;
+    string response = fetchUrlContent(url);
+
+    if (response.empty() || response == "null")
+    {
+        cout << "No hay video original para el trial " << trialId << endl;
+        return "";
+    }
+
+    // Eliminar comillas si existen
+    if (response.front() == '"' && response.back() == '"')
+    {
+        response = response.substr(1, response.length() - 2);
+    }
+
+    return response;
+}
+
+// Hacer coincidir las duraciones de dos videos, recortando el más largo
+void matchVideoLengths(const string &heatmapVideo, const string &originalVideo)
+{
+    double durationHeatmap = getVideoDuration(heatmapVideo);
+    double durationOriginal = getVideoDuration(originalVideo);
+
+    if (durationHeatmap <= 0 || durationOriginal <= 0)
+    {
+        cerr << "No se pudo obtener la duración de uno o ambos videos" << endl;
+        return;
+    }
+
+    cout << "Duraciones: Heatmap=" << durationHeatmap << "s, Original=" << durationOriginal << "s" << endl;
+
+    // Si la diferencia es muy pequeña, no recortar
+    if (abs(durationHeatmap - durationOriginal) < 0.1)
+    {
+        return;
+    }
+
+    double shortestDuration = min(durationHeatmap, durationOriginal);
+
+    if (durationHeatmap > shortestDuration)
+    {
+        // El video de heatmap es más largo, lo recortamos
+        string trimmedHeatmap = heatmapVideo.substr(0, heatmapVideo.find_last_of('.')) + "_trimmed.mp4";
+        cout << "Recortando heatmap video a " << shortestDuration << "s" << endl;
+        if (trimVideo(heatmapVideo, trimmedHeatmap, shortestDuration))
+        {
+            // Reemplazar el archivo original con el recortado
+            string mvCmd = "mv \"" + trimmedHeatmap + "\" \"" + heatmapVideo + "\"";
+            system(mvCmd.c_str());
+            cout << "Heatmap recortado exitosamente" << endl;
+        }
+    }
+    else
+    {
+        // El video original es más largo, lo recortamos
+        string trimmedOriginal = originalVideo.substr(0, originalVideo.find_last_of('.')) + "_trimmed.mp4";
+        cout << "Recortando video original a " << shortestDuration << "s" << endl;
+        if (trimVideo(originalVideo, trimmedOriginal, shortestDuration))
+        {
+            // Reemplazar el archivo original con el recortado
+            string mvCmd = "mv \"" + trimmedOriginal + "\" \"" + originalVideo + "\"";
+            system(mvCmd.c_str());
+            cout << "Video original recortado exitosamente" << endl;
+        }
+    }
+}
 //------------------------------------------------------------
 // Procesar stream Redis
 //------------------------------------------------------------
@@ -781,6 +873,19 @@ void processStream(redisReply *stream, redisContext *ctx, string &lastID,
                           "_wearableR_" + wearR;
         string outFile = basePath + ".mp4";
         generate_animation(pl, pr, cl, cr, outFile);
+
+        // ----------------------------
+        string originalVideo = getOriginalVideoPath(trialId);
+        if (!originalVideo.empty())
+        {
+            cout << "Video original encontrado: " << originalVideo << endl;
+            matchVideoLengths(outFile, originalVideo);
+        }
+        else
+        {
+            cout << "No se encontró video original para comparar" << endl;
+        }
+        // ----------------------------
         updateTrial(outFile, trialId);
         deleteFromQueue(ctx, lastID);
     }
@@ -823,6 +928,7 @@ int main()
 {
     cout << "Logging in to service..." << endl;
     loginToAPI();
+    fetchCsrfToken();
     cout << "Iniciando generación de animaciones..." << endl;
     consumeFromQueue();
     return 0;
