@@ -22,7 +22,7 @@ using namespace std;
 using namespace cv;
 using namespace rapidjson;
 
-const std::string apiHost = "http://ssith-backend-container:3000";
+const string apiHost = "http://ssith-backend-container:3000";
 
 // Parámetros de vídeo y malla
 constexpr int wFinal = 175;
@@ -31,11 +31,11 @@ constexpr int gridW = 20;
 constexpr int gridH = 69;
 constexpr double radius = 70.0;
 constexpr double smoothness = 2.0;
-constexpr double fps = 32.0;
 constexpr int trailLength = 10;
 constexpr int margin = 50;
 constexpr int legendWidth = 80;
 const string baseUrl = apiHost + "/swData/generateCSV/";
+const string fpsBaseUrl = apiHost + "/swData/getInsolesFPS/";
 const string redisQueue = "redis_queue";
 
 // PostgreSQL
@@ -648,9 +648,33 @@ Point compute_COP(const vector<int> &press, const vector<pair<double, double>> &
 }
 
 //------------------------------------------------------------
+// Obtener los fps de las plantillas
+// ------------------------------------------------------------
+
+double getInsolesFPS(
+    const string &expId,
+    const string &partId,
+    const string &sWId,
+    const string &trialId,
+    const string &wearL,
+    const string &wearR)
+{
+    string query = "wearableIds=" + wearL + "&wearableIds=" + wearR;
+    string url = fpsBaseUrl + expId + "/" + partId + "/" + sWId + "/" + trialId + "?" + query;
+    string response = fetchUrlContent(url);
+
+    if (response.empty() || response == "null")
+    {
+        cout << "There was a problem retriving insoles fps" << endl;
+        return -1.0; // Indicar error
+    }
+
+    return stod(response);
+}
+//------------------------------------------------------------
 // Generar animación completa: heatmap + COP
 //------------------------------------------------------------
-void generate_animation(const vector<vector<int>> &pl,
+void generate_animation(const double &fps, const vector<vector<int>> &pl,
                         const vector<vector<int>> &pr,
                         const vector<pair<double, double>> &cl,
                         const vector<pair<double, double>> &cr,
@@ -772,7 +796,6 @@ bool trimVideo(const string &inputPath, const string &outputPath, double duratio
 // Obtener la ruta del video original grabado
 string getOriginalVideoPath(const string &trialId)
 {
-    // Aquí deberías obtener la ruta del video original a través de la API o DB
     string url = rVideoPathBaseUrl + trialId;
     string response = fetchUrlContent(url);
 
@@ -872,7 +895,9 @@ void processStream(redisReply *stream, redisContext *ctx, string &lastID,
                           "_wearableL_" + wearL +
                           "_wearableR_" + wearR;
         string outFile = basePath + ".mp4";
-        generate_animation(pl, pr, cl, cr, outFile);
+
+        const double fps = getInsolesFPS(expId, partId, sWId, trialId, wearL, wearR);
+        generate_animation(fps, pl, pr, cl, cr, outFile);
 
         // ----------------------------
         string originalVideo = getOriginalVideoPath(trialId);
