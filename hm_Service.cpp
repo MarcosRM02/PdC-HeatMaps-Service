@@ -205,11 +205,11 @@ string fetchUrlContent(const string &url)
 //------------------------------------------------------------
 // Extraer contenido interno removiendo [[ ]]
 //------------------------------------------------------------
-string extractContent(const string &raw)
+string extractContent(const string &raw, const string &trialId)
 {
     if (raw.size() < 4 || raw.substr(0, 2) != "[[" || raw.substr(raw.size() - 2) != "]]")
     {
-        cerr << "Formato inesperado del API" << endl;
+        cerr << "Formato inesperado del API. Trial involved:  " << trialId << endl;
         return string();
     }
     return raw.substr(2, raw.size() - 4);
@@ -305,7 +305,7 @@ void fetchCSV(
     string query = "wearableIds=" + wearL + "&wearableIds=" + wearR;
     string url = baseUrl + expId + "/" + partId + "/" + sWId + "/" + trialId + "?" + query;
     string raw = fetchUrlContent(url);
-    string content = extractContent(raw);
+    string content = extractContent(raw, trialId);
     auto parts = splitCSVContent(content);
     leftData = parseCSV(processPart(parts.first));
     rightData = parseCSV(processPart(parts.second));
