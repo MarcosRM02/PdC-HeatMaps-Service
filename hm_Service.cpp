@@ -22,7 +22,7 @@ using namespace std;
 using namespace cv;
 using namespace rapidjson;
 
-const string apiHost = "http://ssith-backend-container:3000";
+const string apiHost = "";
 
 // Parámetros de vídeo y malla
 constexpr int wFinal = 175;
@@ -34,29 +34,29 @@ constexpr double smoothness = 2.0;
 constexpr int trailLength = 10;
 constexpr int margin = 50;
 constexpr int legendWidth = 80;
-const string baseUrl = apiHost + "/swData/generateCSV/";
-const string fpsBaseUrl = apiHost + "/swData/getInsolesFPS/";
-const string redisQueue = "redis_queue";
+const string baseUrl = apiHost + "";
+const string fpsBaseUrl = apiHost + "";
+const string redisQueue = "";
 
 // PostgreSQL
 PGconn *cnn = nullptr;
 PGresult *result = nullptr;
-const char *dbHost = "sqlDB";
-const char *dbPort = "5432";
-const char *dbName = "ssith-db";
-const char *dbUser = "admin";
-const char *dbPass = "admin";
+const char *dbHost = "";
+const char *dbPort = "";
+const char *dbName = "";
+const char *dbUser = "";
+const char *dbPass = "";
 
 // API login (JWT)
-const string apiUser = "marcos";
-const string apiPassword = "zodv38jN0Bty5ns1";
-const string loginUrl = apiHost + "/authentication/serviceLogin/";
+const string apiUser = "";
+const string apiPassword = "";
+const string loginUrl = apiHost + "";
 
 // CSRF token
 static string g_csrfToken;
-const string csrfUrl = apiHost + "/authentication/csrf-token";
-const string trialsBaseUrl = apiHost + "/trials/edit/";
-const string rVideoPathBaseUrl = apiHost + "/trials/getRVideoPath/";
+const string csrfUrl = apiHost + "";
+const string trialsBaseUrl = apiHost + "";
+const string rVideoPathBaseUrl = apiHost + "";
 
 // cURL write callback
 size_t WriteCallback(void *contents, size_t size, size_t nmemb, string *output)
