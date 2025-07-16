@@ -923,7 +923,7 @@ void consumeFromQueue()
 {
     vector<pair<double, double>> coordsL, coordsR;
     readCoordinates(coordsL, coordsR);
-    redisContext *ctx = connectToRedis("redis_container", 6379, "mi_contraseña_secreta");
+    redisContext *ctx = connectToRedis("", , "");
     if (!ctx)
         return;
     string lastID = "0";
