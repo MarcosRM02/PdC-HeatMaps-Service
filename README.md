@@ -3,6 +3,8 @@
     <img width="310" height="168" alt="images" src="https://github.com/user-attachments/assets/0185155b-463e-4ba2-bd47-085d5ebd1536" />
 </div>
 
+This repository is one component of the MVP‑Gait toolkit, a collection of interoperable services including an Application Program Interface, Front‑End web Service, and an Animation Generator Microservice, developed to support the [SSITH](https://mamilab.eu/ssith-project/) project and advance research in human gait studies.
+
 # **MVP-Gait Animation Generator Microservice**
 
 This microservice, written in C++17, consumes Redis tasks, fetches sensor data via HTTP from the PdC Visualization API, processes point clouds into heat map images using OpenCV & Eigen, and stores or forwards results to downstream systems (PostgreSQL, file storage).
